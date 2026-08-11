@@ -6,3 +6,4 @@ A simple on-calc editor for TI-Nspire Lua. Has several features in v0.1 like a t
 - Run your code including a terminal for print() calls
 - Rename tabs/files
 - An editor outside of 2DEditor library
+Click ctrl+menu to save your code to the runner app! Then run your script!
