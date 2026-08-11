@@ -25,3 +25,22 @@ function on.timer()
    end 
 end
 timer.start(1)
+function on.charIn(ch)
+    if ch == "r" then
+        clearScreenRequested = true
+        
+        platform.window:invalidate() 
+    end
+end
+function on.paint(gc)
+    if clearScreenRequested then
+        gc:setColorRGB(255, 255, 255)
+        
+        local w = platform.window:width()
+        local h = platform.window:height()
+        
+        code1=""
+        platform.window:invalidate() 
+    else
+    end
+end
