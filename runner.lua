@@ -28,8 +28,6 @@ timer.start(1)
 function on.charIn(ch)
     if ch == "r" then
         clearScreenRequested = true
-        
-        platform.window:invalidate() 
     end
 end
 function on.paint(gc)
