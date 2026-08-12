@@ -7,3 +7,6 @@ A simple on-calc editor for TI-Nspire Lua. Has several features in v0.1 like a t
 - Rename tabs/files
 - An editor outside of 2DEditor library
 - Click ctrl+menu to save your code to the runner app! Then run your script!
+- x^2 for :
+- e^x and 10^x for [ and ] respectively
+- ln( and log( for { and } respectively
