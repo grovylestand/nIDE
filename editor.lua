@@ -740,7 +740,7 @@ end
 function on.contextMenu()
     code=""
     for e=1,#current().lines do
-        code=code..current().lines[e]..""
+        code=code..current().lines[e].."\n"
     end
     var.store("nidecurcode", code)
 end
