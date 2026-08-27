@@ -692,40 +692,82 @@ end
 
 function on.copy()
     local doc = current()
-    clipboard.setText(current().lines[current().row] or "")
+    if not isTextSelected then
+        clipboard.setText(doc.lines[doc.row] or "")
+        return
+    elseif doc.row == selAnchorLine and doc.col == selAnchorCol then
+        return
+    end
+
+    local startLine, startCol, endLine, endCol
+    if doc.row < selAnchorLine or (doc.row == selAnchorLine and doc.col < selAnchorCol) then
+        startLine, startCol = doc.row, doc.col
+        endLine, endCol = selAnchorLine, selAnchorCol
+    else
+        startLine, startCol = selAnchorLine, selAnchorCol
+        endLine, endCol = doc.row, doc.col
+    end
+
+    local copiedText = ""
+    if startLine == endLine then
+        local lineText = doc.lines[startLine] or ""
+        copiedText = string.sub(lineText, startCol + 1, endCol)
+    else
+        local firstLineText = doc.lines[startLine] or ""
+        copiedText = string.sub(firstLineText, startCol + 1) .. "\n"
+        
+        for i = startLine + 1, endLine - 1 do
+            copiedText = copiedText .. (doc.lines[i] or "") .. "\n"
+        end
+        
+        local lastLineText = doc.lines[endLine] or ""
+        copiedText = copiedText .. string.sub(lastLineText, 1, endCol)
+    end
+
+    clipboard.addText(copiedText)
 end
+
 
 function on.paste()
     local pasteText = clipboard.getText()
     if not pasteText or pasteText == "" then return end
+    
     local doc = current()
-    local currentText = current().lines[current().row] or ""
-    local left = string.sub(currentText, 1, current().col)
-    local right = string.sub(currentText, current().col + 1)
+    local currentText = doc.lines[doc.row] or ""
+    local left = string.sub(currentText, 1, doc.col)
+    local right = string.sub(currentText, doc.col + 1)
+    
     local pastedLines = {}
-    for line in (pasteText .. ""):gmatch("([^]*)??") do
+    for line in string.gmatch(pasteText, "[^\r\n]+") do
         table.insert(pastedLines, line)
     end
-    if #pastedLines > 1 then table.remove(pastedLines) end
+    
+    if #pastedLines == 0 then
+        table.insert(pastedLines, "")
+    end
+    
     if #pastedLines <= 1 then
-        current().lines[current().row] = left .. pasteText .. right
-        current().col = current().col + string.len(pasteText)
+        doc.lines[doc.row] = left .. pasteText .. right
+        doc.col = doc.col + string.len(pasteText)
     else
         pastedLines[1] = left .. pastedLines[1]
         local lastLineIdx = #pastedLines
         local targetCol = string.len(pastedLines[lastLineIdx])
         pastedLines[lastLineIdx] = pastedLines[lastLineIdx] .. right
-        current().lines[current().row] = pastedLines[1]
+        
+        doc.lines[doc.row] = pastedLines[1]
         for i = 2, lastLineIdx do
-            table.insert(current().lines, current().row + i - 1, pastedLines[i])
+            table.insert(doc.lines, doc.row + i - 1, pastedLines[i])
         end
-        current().row = current().row + lastLineIdx - 1
-        current().col = targetCol
+        doc.row = doc.row + lastLineIdx - 1
+        doc.col = targetCol
     end
+    
     editor.shouldWrap = true
     scrollIntoView()
     platform.window:invalidate()
 end
+
 
 function on.mouseDown(x, y)
     editor.pendingClick = {x = x, y = y}
