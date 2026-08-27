@@ -14,7 +14,11 @@ _G.print = function(...)
     end
     var.store("nidetermlog", current_logs)
 end
-
+menu = {
+    {"Script",
+    {"Restart Script",function() clearScreenRequested=true end}}
+}
+toolpalette.register(menu)
 code1 = ""
 function on.timer()
    code2 = var.recall("nidecurcode") or ""
@@ -25,11 +29,6 @@ function on.timer()
    end 
 end
 timer.start(1)
-function on.charIn(ch)
-    if ch == "r" then
-        clearScreenRequested = true
-    end
-end
 function on.paint(gc)
     if clearScreenRequested then
         gc:setColorRGB(255, 255, 255)
