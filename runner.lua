@@ -37,7 +37,8 @@ function on.paint(gc)
         local h = platform.window:height()
         
         code1=""
-        platform.window:invalidate() 
+        platform.window:invalidate()
+        clearScreenRequested=false
     else
     end
 end
