@@ -18,13 +18,29 @@ menu = {
     {"Script",
     {"Restart Script",function() clearScreenRequested=true end}}
 }
+local function loadcode(code)
+    ERR = nil
+    local chunk, errload = loadstring(code)
+    if not chunk then
+        ERR = errload
+        print(ERR)
+        platform.window:invalidate()
+    else
+        local status, errcall = pcall(chunk)
+        if not status then
+            ERR = errcall
+            print(ERR)
+        end
+        platform.window:invalidate()
+    end
+end
 toolpalette.register(menu)
 code1 = ""
 function on.timer()
    code2 = var.recall("nidecurcode") or ""
    if code1 ~= code2 then
       code1 = code2
-      pcall(loadstring(code1))
+      loadcode(code1)
       platform.window:invalidate()
    end 
 end
@@ -37,7 +53,7 @@ function on.paint(gc)
         local h = platform.window:height()
         
         code1=""
-        platform.window:invalidate()
+        platform.window:invalidate() 
         clearScreenRequested=false
     else
     end
