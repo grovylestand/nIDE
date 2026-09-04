@@ -284,6 +284,20 @@ toolpalette.enableCopy(true)
 toolpalette.enablePaste(true)
 
 menu = {
+    {"Code",
+    {"Go to Line", function()
+            Prompt.show("Go to line: ", "", function(result)
+                local targetLine = tonumber(result)
+                if targetLine then
+                    local doc = current()
+                    doc.row = math.max(1, math.min(targetLine, #doc.lines))
+                    doc.col = 0
+                    scrollIntoView()
+                    platform.window:invalidate()
+                end
+            end)
+        end}
+    },
     {"Tabs",
         {"New Tab", function()
             editor.tabCounter = editor.tabCounter + 1
@@ -510,7 +524,7 @@ function on.paint(gc)
                 gc:fillRect(sX, yPos, sW, LINE_HEIGHT)
             end
             local charTracker = 0
-            for spaces, word in lineText:gmatch("([%s]*)(%S+)") do 
+            for spaces, token in lineText:gmatch("([%s]*)([%w_%p]+)") do 
                 if spaces and spaces ~= "" then
                     for sIdx = 1, string.len(spaces) do
                         if lineSelStart and lineSelEnd and charTracker >= lineSelStart and charTracker < lineSelEnd then
@@ -524,26 +538,48 @@ function on.paint(gc)
                         charTracker = charTracker + 1
                     end
                 end
-                local syntaxR, syntaxG, syntaxB = 0, 0, 0
-                if word == "and" or word == "or" or word == "not" or word == "if" or 
-                   word == "then" or word == "else" or word == "elseif" or word == "end" or 
-                   word == "for" or word == "while" or word == "do" or word == "repeat" or 
-                   word == "until" or word == "function" or word == "return" or word == "local" or 
-                   word == "break" or word == "in" then
-                    syntaxR, syntaxG, syntaxB = 0, 0, 255
-                elseif word == "true" or word == "false" or word == "nil" then
-                    syntaxR, syntaxG, syntaxB = 255, 0, 0
-                end
-                for wIdx = 1, string.len(word) do
-                    if lineSelStart and lineSelEnd and charTracker >= lineSelStart and charTracker < lineSelEnd then
-                        gc:setColorRGB(255, 255, 255)
+
+                local subPos = 1
+                while subPos <= string.len(token) do
+                    local wStart, wEnd = token:find("^([%w_]+)", subPos)
+                    local word = ""
+                    local isSymbol = false
+
+                    if wStart then
+                        word = token:sub(wStart, wEnd)
+                        subPos = wEnd + 1
                     else
-                        gc:setColorRGB(syntaxR, syntaxG, syntaxB)
+                        word = token:sub(subPos, subPos)
+                        isSymbol = true
+                        subPos = subPos + 1
                     end
-                    local ch = word:sub(wIdx, wIdx)
-                    gc:drawString(ch, DRAWROW, yPos, "top")
-                    DRAWROW = DRAWROW + gc:getStringWidth(ch)
-                    charTracker = charTracker + 1
+
+                    local syntaxR, syntaxG, syntaxB = 0, 0, 0
+                    if not isSymbol then
+                        if word == "and" or word == "or" or word == "not" or word == "if" or 
+                           word == "then" or word == "else" or word == "elseif" or word == "end" or 
+                           word == "for" or word == "while" or word == "do" or word == "repeat" or 
+                           word == "until" or word == "function" or word == "return" or word == "local" or 
+                           word == "break" or word == "in" then
+                            syntaxR, syntaxG, syntaxB = 0, 0, 255
+                        elseif word == "true" or word == "false" or word == "nil" then
+                            syntaxR, syntaxG, syntaxB = 255, 0, 0
+                        elseif word == "assert" or word=="collectgarbage" or word=="error" or word=="_G" or word=="getfenv" or word=="getmetatable" or word=="ipairs" or word=="load" or word=="loadstring"  or word=="next" or word=="pairs" or word=="pcall" or word=="print" or word=="rawequal" or word=="rawget" or word=="rawset" or word=="select" or word=="setfenv" or word=="setmetatable" or word=="tonumber" or word=="tostring" or word=="type" or word=="unpack" or word=="xpcall" or word=="_VERSION" then
+                            syntaxR, syntaxG, syntaxB = 0,255,0
+                        end
+                    end
+
+                    for wIdx = 1, string.len(word) do
+                        if lineSelStart and lineSelEnd and charTracker >= lineSelStart and charTracker < lineSelEnd then
+                            gc:setColorRGB(255, 255, 255)
+                        else
+                            gc:setColorRGB(syntaxR, syntaxG, syntaxB)
+                        end
+                        local ch = word:sub(wIdx, wIdx)
+                        gc:drawString(ch, DRAWROW, yPos, "top")
+                        DRAWROW = DRAWROW + gc:getStringWidth(ch)
+                        charTracker = charTracker + 1
+                    end
                 end
             end
             if lineIdx == current().row and editor.cursorVisible and not isTextSelected then
@@ -580,38 +616,93 @@ end
 function on.charIn(char)
     if Prompt.charIn(char) then return end
     deleteSelectedText()
-    character = char
+    
+    local character = char
     local doc = current()
     local currentText = doc.lines[doc.row] or ""
     local left = string.sub(currentText, 1, doc.col)
     local right = string.sub(currentText, doc.col + 1)
+    
     if char == "^2" then character = ":" end
     if char == "exp(" then character = "[" end
     if char == "10^(" then character = "]" end
     if char == "ln(" then character = "{" end
     if char == "log(" then character = "}" end
-    doc.lines[doc.row] = left .. character .. right
-    doc.col = doc.col + 1
+    
+    local nextChar = string.sub(right, 1, 1)
+    if (character == ")" or character == "]" or character == "}" or character == '"') and nextChar == character then
+        doc.col = doc.col + 1
+        scrollIntoView()
+        platform.window:invalidate()
+        return
+    end
+
+    local closingPair = ""
+    if character == "(" then closingPair = ")"
+    elseif character == "[" then closingPair = "]"
+    elseif character == "{" then closingPair = "}"
+    elseif character == '"' then closingPair = '"'
+    end
+    
+    local newLeft = left .. character
+    
+    doc.lines[doc.row] = newLeft .. closingPair .. right
+    doc.col = doc.col + string.len(character)
+    
+    local leadingSpaces, keyword = string.match(newLeft, "^(%s*)([eE][nN][dD])$")
+    if not keyword then
+        leadingSpaces, keyword = string.match(newLeft, "^(%s*)([eE][lL][sS][eE])$")
+    end
+    if not keyword then
+        leadingSpaces, keyword = string.match(newLeft, "^(%s*)([eE][lL][sS][eE][iI][fF])$")
+    end
+    
+    if keyword and string.len(leadingSpaces) >= 4 then
+        local strippedSpaces = string.sub(leadingSpaces, 1, -5)
+        doc.lines[doc.row] = strippedSpaces .. keyword .. closingPair .. right
+        doc.col = string.len(strippedSpaces) + string.len(keyword)
+    end
+    
     editor.shouldWrap = true
     scrollIntoView()
     platform.window:invalidate()
 end
 
+
 function on.enterKey()
     if Menu.enter() then return end
     if Prompt.enter() then return end
     deleteSelectedText()
+    
     local doc = current()
     local currentText = doc.lines[doc.row] or ""
+    
     local left = string.sub(currentText, 1, doc.col)
     local right = string.sub(currentText, doc.col + 1)
+    
+    local leadingSpaces = string.match(left, "^(%s*)") or ""
+    
+    local trimmedLeft = string.gsub(left, "%s*$", "")
+    if string.match(trimmedLeft, "%f[%w]then$") or 
+       string.match(trimmedLeft, "%f[%w]do$") or 
+       string.match(trimmedLeft, "%f[%w]function%s*%b()$") or 
+       string.match(trimmedLeft, "%f[%w]function%s*[%w_.:]*%s*%b()$") or
+       string.match(trimmedLeft, "%f[%w]repeat$") or 
+       string.match(trimmedLeft, "%f[%w]else$") or 
+       string.match(trimmedLeft, "%f[%w]elseif%s.*$") then
+        leadingSpaces = leadingSpaces .. "    "
+    end
+    
     doc.lines[doc.row] = left
-    table.insert(doc.lines, doc.row + 1, right)
+    table.insert(doc.lines, doc.row + 1, leadingSpaces .. right)
+    
     doc.row = doc.row + 1
-    doc.col = 0
+    doc.col = string.len(leadingSpaces)
+    
     scrollIntoView()
     platform.window:invalidate()
 end
+
 
 function on.backspaceKey()
     if Prompt.backspace() then return end
@@ -639,6 +730,7 @@ function on.backspaceKey()
 end
 
 function on.arrowKey(direction)
+    if Prompt.active then return end
     if Menu.active then
         if direction == "up" then 
             Menu.arrowUp() 
@@ -647,9 +739,6 @@ function on.arrowKey(direction)
         end
         return
     end
-
-    if Prompt.active then return end
-
     if isTextSelected then 
         handleSelectionKeys(direction) 
         return 
