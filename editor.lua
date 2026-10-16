@@ -127,6 +127,19 @@ function plugins.applyAll()
 
     for _, p in ipairs(plugins.list) do
         if p.enabled then
+            if type(p.actions) == "table" then
+                for _, act in ipairs(p.actions) do
+                    table.insert(plugins.actions, act)
+                end
+            end
+            if type(p.menuItems) == "table" then
+                for _, item in ipairs(p.menuItems) do
+                    if type(item) == "table" and item[1] and item[2] then
+                        table.insert(plugins.actions, { label = item[1], fn = item[2] })
+                    end
+                end
+            end
+
             if type(p.themePacks) == "table" then
                 for themeName, themeData in pairs(p.themePacks) do
                     local builtTheme = { name = themeName }
@@ -162,12 +175,6 @@ function plugins.applyAll()
                 end
             end
 
-            if type(p.actions) == "table" then
-                for _, act in ipairs(p.actions) do
-                    table.insert(plugins.actions, act)
-                end
-            end
-
             if type(p.onInit) == "function" then
                 pcall(p.onInit, editor)
             end
@@ -183,6 +190,31 @@ function plugins.applyAll()
     end
     editor.currentTheme = recoveredIdx
 end
+
+function plugins.rebuildMenu()
+    local pluginToolbox = nil
+    for _, box in ipairs(menu) do
+        if box[1] == "Plugins" then
+            pluginToolbox = box
+            break
+        end
+    end
+
+    if pluginToolbox then
+        for i = #pluginToolbox, 4, -1 do
+            table.remove(pluginToolbox, i)
+        end
+
+        for _, act in ipairs(plugins.actions) do
+            local label = type(act) == "table" and (act.label or act[1]) or "Unnamed Action"
+            local fn = type(act) == "table" and (act.fn or act[2]) or function() end
+            table.insert(pluginToolbox, {label, fn})
+        end
+    end
+
+    toolpalette.register(menu)
+end
+
 
 function plugins.registerFromCode(name, codeStr, autoEnable, doSave)
     local chunk, err = loadstring(codeStr)
@@ -270,28 +302,6 @@ function createPluginTemplate()
     })
     editor.activeTab = #editor.tabs
     platform.window:invalidate()
-end
-
-function plugins.rebuildMenu()
-    local pluginToolbox = nil
-    for _, box in ipairs(menu) do
-        if box[1] == "Plugins" then
-            pluginToolbox = box
-            break
-        end
-    end
-
-    if pluginToolbox then
-        for i = #pluginToolbox, 4, -1 do
-            table.remove(pluginToolbox, i)
-        end
-
-        for _, act in ipairs(plugins.actions) do
-            table.insert(pluginToolbox, {act.label, act.fn})
-        end
-    end
-
-    toolpalette.register(menu)
 end
 
 
