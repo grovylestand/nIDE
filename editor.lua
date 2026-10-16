@@ -769,6 +769,7 @@ menu = {
         {"Save", function()
             local varNames = var.recall("nidevarnames") or {}
             local activeDoc = current()
+            plugins.triggerHook("onBeforeSave", activeDoc)
             local varName = string.sub("nide_" .. activeDoc.name, 1, 16) 
             
             if not has(varNames, varName) then
