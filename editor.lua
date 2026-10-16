@@ -24,48 +24,49 @@ consoleBuffer = {}
 maxLines = 10  
 local themes = {
     {
-        bg = {245, 245, 245},
+        name = "Light Mode",
+        bg = {246, 248, 250},
         activeTab = {255, 255, 255},
-        activeTabText = {0,0,0},
-        inactiveTab = {220, 220, 220},
-        inactiveTabText = {100, 100, 100},
-        newTabBackground = {230, 230, 230},
-        newTabBorders = {180, 180, 180},
-        scrollTrack = {235, 235, 235},
-        scrollThumb = {170, 170, 170},
-        selectColor = {180, 210, 255},
-        closeTab = {200, 60, 60},
-        promptBg = {245, 245, 245},
-        activeRow = {230, 235, 245},
-        menuScrollTrack = {230, 230, 230},
-        menuScrollThumb = {160, 160, 160},
-        keywordsH = {0, 0, 200},
-        boolnilH = {180, 0, 0},
-        stdlibH = {0, 130, 0},
-        codeH = {30, 30, 30}
+        activeTabText = {36, 41, 47},
+        inactiveTab = {243, 244, 246},
+        inactiveTabText = {87, 96, 106},
+        newTabBackground = {234, 238, 242},
+        newTabBorders = {209, 213, 219},
+        scrollTrack = {246, 248, 250},
+        scrollThumb = {213, 216, 219},
+        selectColor = {218, 233, 254},
+        closeTab = {207, 34, 46},
+        promptBg = {255, 255, 255},
+        activeRow = {234, 242, 255},
+        menuScrollTrack = {243, 244, 246},
+        menuScrollThumb = {209, 213, 219},
+        keywordsH = {215, 58, 73},
+        boolnilH = {0, 92, 197},
+        stdlibH = {111, 66, 193},
+        codeH = {36, 41, 47}
     },
     {
-        bg = {25, 25, 25},
-        activeTab = {40, 40, 40},
-        activeTabText = {240,240,240},
-        inactiveTab = {18, 18, 18},
-        inactiveTabText = {130, 130, 130},
-        newTabBackground = {30, 30, 30},
-        newTabBorders = {70, 70, 70},
-        scrollTrack = {20, 20, 20},
-        scrollThumb = {70, 70, 70},
-        selectColor = {40, 80, 140},
-        closeTab = {180, 70, 70},
-        promptBg = {25, 25, 25},
-        activeRow = {45, 45, 45},
-        menuScrollTrack = {30, 30, 30},
-        menuScrollThumb = {80, 80, 80},
+        name = "Dark Moded",
+        bg = {30, 30, 30},
+        activeTab = {37, 37, 38},
+        activeTabText = {255, 255, 255},
+        inactiveTab = {45, 45, 45},
+        inactiveTabText = {150, 150, 150},
+        newTabBackground = {51, 51, 51},
+        newTabBorders = {67, 67, 67},
+        scrollTrack = {30, 30, 30},
+        scrollThumb = {66, 66, 66},
+        selectColor = {38, 79, 120},
+        closeTab = {241, 76, 76},
+        promptBg = {37, 37, 38},
+        activeRow = {45, 45, 48},
+        menuScrollTrack = {45, 45, 45},
+        menuScrollThumb = {61, 61, 61},
         keywordsH = {86, 156, 214},
-        boolnilH = {206, 145, 120},
+        boolnilH = {220, 162, 111},
         stdlibH = {78, 201, 176},
-        codeH = {220, 220, 220}
-    }
-}
+        codeH = {212, 212, 212}
+    }}
 
 local editor = {
     tabs = {
@@ -81,10 +82,223 @@ local editor = {
     shouldWrap = false
 }
 
+plugins = {
+    list = {},
+    snippets = {},
+    actions = {}
+}
+
+function loadPlugins()
+    local savedList = var.recall("nide_plugins") or {}
+    plugins.list = {}
+    if type(savedList) == "table" then
+        for _, pluginName in ipairs(savedList) do
+            local codeStr = var.recall("nide_plug_" .. pluginName)
+            if type(codeStr) == "string" then
+                plugins.registerFromCode(pluginName, codeStr, true, false)
+            end
+        end
+    end
+    plugins.applyAll()
+end
+
+function savePlugins()
+    local pluginNames = {}
+    for _, p in ipairs(plugins.list) do
+        table.insert(pluginNames, p.name)
+        if p.code then
+            var.store("nide_plug_" .. p.name, p.code)
+        end
+    end
+    var.store("nide_plugins", pluginNames)
+end
+
+function plugins.applyAll()
+    plugins.snippets = {}
+    plugins.actions = {}
+
+    local activeThemeName = themes[editor.currentTheme] and themes[editor.currentTheme].name or ""
+    
+    for i = #themes, 3, -1 do
+        table.remove(themes, i)
+    end
+    
+    loadCustomThemes()
+
+    for _, p in ipairs(plugins.list) do
+        if p.enabled then
+            if type(p.themePacks) == "table" then
+                for themeName, themeData in pairs(p.themePacks) do
+                    local builtTheme = { name = themeName }
+                    for propertyKey, rgbValue in pairs(themeData) do
+                        if type(rgbValue) == "table" then
+                            builtTheme[propertyKey] = {
+                                tonumber(rgbValue[1]) or 255,
+                                tonumber(rgbValue[2]) or 255,
+                                tonumber(rgbValue[3]) or 255
+                            }
+                        end
+                    end
+                    
+                    local existingIdx = nil
+                    for idx, t in ipairs(themes) do
+                        if t.name == themeName then
+                            existingIdx = idx
+                            break
+                        end
+                    end
+                    
+                    if existingIdx then
+                        themes[existingIdx] = builtTheme
+                    else
+                        table.insert(themes, builtTheme)
+                    end
+                end
+            end
+
+            if type(p.snippets) == "table" then
+                for _, snip in ipairs(p.snippets) do
+                    table.insert(plugins.snippets, snip)
+                end
+            end
+
+            if type(p.actions) == "table" then
+                for _, act in ipairs(p.actions) do
+                    table.insert(plugins.actions, act)
+                end
+            end
+
+            if type(p.onInit) == "function" then
+                pcall(p.onInit, editor)
+            end
+        end
+    end
+    
+    local recoveredIdx = 2
+    for idx, t in ipairs(themes) do
+        if t.name == activeThemeName then
+            recoveredIdx = idx
+            break
+        end
+    end
+    editor.currentTheme = recoveredIdx
+end
+
+function plugins.registerFromCode(name, codeStr, autoEnable, doSave)
+    local chunk, err = loadstring(codeStr)
+    if not chunk then
+        return false, "Syntax Error: " .. tostring(err)
+    end
+
+    local env = setmetatable({
+        editor = editor,
+        current = current,
+        themes = themes,
+        Prompt = Prompt,
+        Menu = Menu,
+        var = var,
+        platform = platform
+    }, { __index = _G })
+
+    setfenv(chunk, env)
+    local status, pObj = pcall(chunk)
+
+    if not status or type(pObj) ~= "table" then
+        return false, "Plugin must return a table definition."
+    end
+
+    pObj.name = pObj.name or name
+    pObj.code = codeStr
+    pObj.enabled = (autoEnable == nil and true) or autoEnable
+
+    local replaced = false
+    for i, p in ipairs(plugins.list) do
+        if p.name == pObj.name then
+            plugins.list[i] = pObj
+            replaced = true
+            break
+        end
+    end
+    if not replaced then
+        table.insert(plugins.list, pObj)
+    end
+
+    plugins.applyAll()
+    if doSave ~= false then savePlugins() end
+    plugins.rebuildMenu()
+    return true
+end
+
+function plugins.triggerHook(hookName, ...)
+    for _, p in ipairs(plugins.list) do
+        if p.enabled and type(p[hookName]) == "function" then
+            pcall(p[hookName], ...)
+        end
+    end
+end
+
+function createPluginTemplate()
+    editor.tabCounter = editor.tabCounter + 1
+    local template = [[return {
+    name = "MyExtension",
+    author = "User",
+    version = "1.0",
+    onInit = function(ed)
+    end,
+    onBeforeSave = function(tab)
+    end,
+    onRender = function(gc)
+    end,
+    menuItems = {
+        {"Plugin Action", function()
+            Prompt.show("Plugin Action Executed!", "", function() end)
+        end}
+    }
+}]]
+
+    local lines = {}
+    for line in template:gmatch("([^\n]+)") do
+        table.insert(lines, line)
+    end
+
+    table.insert(editor.tabs, {
+        name = "plug_custom.lua",
+        lines = lines,
+        row = 1,
+        col = 1,
+        scrollRow = 1
+    })
+    editor.activeTab = #editor.tabs
+    platform.window:invalidate()
+end
+
+function plugins.rebuildMenu()
+    local pluginToolbox = nil
+    for _, box in ipairs(menu) do
+        if box[1] == "Plugins" then
+            pluginToolbox = box
+            break
+        end
+    end
+
+    if pluginToolbox then
+        for i = #pluginToolbox, 4, -1 do
+            table.remove(pluginToolbox, i)
+        end
+
+        for _, act in ipairs(plugins.actions) do
+            table.insert(pluginToolbox, {act.label, act.fn})
+        end
+    end
+
+    toolpalette.register(menu)
+end
+
+
 function c(themeColor,num)
   return themes[editor.currentTheme][themeColor][num]
 end
-local function current()
+function current()
     return editor.tabs[editor.activeTab]
 end
 
@@ -128,7 +342,16 @@ end
 function saveCustomThemes()
     local customThemes = {}
     for i = 3, #themes do
-        table.insert(customThemes, themes[i])
+        local isFromPlugin = false
+        for _, p in ipairs(plugins.list) do
+            if p.enabled and p.themePacks and p.themePacks[themes[i].name] then
+                isFromPlugin = true
+                break
+            end
+        end
+        if not isFromPlugin then
+            table.insert(customThemes, themes[i])
+        end
     end
     var.store("nide_themes", customThemes)
 end
@@ -352,73 +575,139 @@ toolpalette.enableCopy(true)
 toolpalette.enablePaste(true)
 
 menu = {
-    {"View",
+    {"Plugins",
+        {"Plugins", function()
+            local options = {}
+            for _, p in ipairs(plugins.list) do
+                table.insert(options, (p.enabled and "[ON] " or "[OFF] ") .. p.name)
+            end
+            if #options == 0 then table.insert(options, "No Plugins Installed") end
+            Menu.show("Plugins:", options, function(idx)
+                if not idx or not plugins.list[idx] then return end
+                plugins.list[idx].enabled = not plugins.list[idx].enabled
+                plugins.applyAll()
+                savePlugins()
+                toolpalette.register(menu)
+            end)
+        end},
+        {"Compile Tab to Plugin", function()
+            local codeStr = table.concat(current().lines, "\n")
+            local ok, err = plugins.registerFromCode(current().name, codeStr, true, true)
+            if not ok then
+                Prompt.show("Compilation Error:", err or "Invalid structure", function() end)
+            else
+                Prompt.show("Success", "Plugin successful!", function() end)
+            end
+        end},
+        {"New Plugin", function()
+            createPluginTemplate()
+        end}
+    },
+        {"View",
         {"Toggle Theme", function()
             editor.currentTheme = (editor.currentTheme % #themes) + 1
             platform.window:invalidate()
         end},
-        {"Edit Theme Properties", function()
-        local propNames = {
-            "1. Background",
-            "2. Active Tab",
-            "3. Inactive Tab",
-            "4. Inactive Tab Text",
-            "5. New Tab BG",
-            "6. New Tab Borders",
-            "7. Scroll Track",
-            "8. Scroll Thumb",
-            "9. Selection Color",
-            "10. Close Tab Button",
-            "11. Prompt BG",
-            "12. Active Row Highlight",
-            "13. Menu Scroll Track",
-            "14. Menu Scroll Thumb",
-            "15. Keywords Highlight",
-            "16. Boolean/Nil Highlight",
-            "17. Stdlib Highlight",
-            "18. Code Text"
-        }
+        {"Themes Management", function()
+            local themeOptions = {}
+            for i = 1, #themes do
+                local prefix = (i == editor.currentTheme) and "[X] " or "[ ] "
+                local baseName = themes[i].name or ("Custom Theme " .. i)
+                table.insert(themeOptions, prefix .. baseName)
+            end
+            table.insert(themeOptions, "[+] Create New Theme")
 
-        local keys = {
-            "bg", "activeTab", "inactiveTab", "inactiveTabText",
-            "newTabBackground", "newTabBorders", "scrollTrack", "scrollThumb",
-            "selectColor", "closeTab", "promptBg", "activeRow",
-            "menuScrollTrack", "menuScrollThumb", "keywordsH", "boolnilH",
-            "stdlibH", "codeH"
-        }
-
-        Menu.show("Select Property to Edit:", propNames, function(index)
-            if not index or not keys[index] then return end
-
-            local key = keys[index]
-            local curTheme = themes[editor.currentTheme] or themes[1]
-            local defaultVal = curTheme[key] and table.concat(curTheme[key], ",") or "255,255,255"
-
-            Prompt.show("Enter RGB for " .. key .. " (R,G,B):", defaultVal, function(input)
-                if not input or input == "" then return end
-
-                local r, g, b = input:match("(%d+),%s*(%d+),%s*(%d+)")
-                if r and g and b then
-                    if editor.currentTheme <= 2 then
-                        local newTheme = {}
-                        for k, v in pairs(curTheme) do
-                            newTheme[k] = {v[1], v[2], v[3]}
-                        end
-                        table.insert(themes, newTheme)
-                        editor.currentTheme = #themes
+            Menu.show("Select or Create Theme:", themeOptions, function(tIndex)
+                if not tIndex then return end
+                
+                if tIndex == #themeOptions then
+                    local baseOptions = {}
+                    for i = 1, #themes do
+                        table.insert(baseOptions, themes[i].name or ("Theme " .. i))
                     end
-
-                    themes[editor.currentTheme][key] = {tonumber(r), tonumber(g), tonumber(b)}
                     
-                    saveCustomThemes()
-                    platform.window:invalidate()
+                    Menu.show("Choose a Base Template:", baseOptions, function(bIndex)
+                        if not bIndex then return end
+                        local selectedBase = themes[bIndex]
+                        
+                        Prompt.show("Enter Name for New Theme:", "", function(newName)
+                            if not newName or newName == "" then return end
+                            
+                            local newTheme = {}
+                            for k, v in pairs(selectedBase) do
+                                if type(v) == "table" then
+                                    newTheme[k] = {v[1], v[2], v[3]}
+                                end
+                            end
+                            newTheme.name = newName
+                            
+                            table.insert(themes, newTheme)
+                            editor.currentTheme = #themes
+                            saveCustomThemes()
+                            platform.window:invalidate()
+                        end)
+                    end)
+                else
+                    local targetThemeIdx = tIndex
+                    local actions = {"Activate Theme", "Rename Theme", "Edit Colors"}
+                    Menu.show("Theme Actions (" .. themes[targetThemeIdx].name .. "):", actions, function(aIndex)
+                        if not aIndex then return end
+                        
+                        if aIndex == 1 then
+                            editor.currentTheme = targetThemeIdx
+                            platform.window:invalidate()
+                        elseif aIndex == 2 then
+                            Prompt.show("Enter new theme name:", themes[targetThemeIdx].name, function(newName)
+                                if newName and newName ~= "" then
+                                    themes[targetThemeIdx].name = newName
+                                    saveCustomThemes()
+                                    platform.window:invalidate()
+                                end
+                            end)
+                        elseif aIndex == 3 then
+                            local propNames = {
+                                "1. Background", "2. Active Tab", "3. Inactive Tab", "4. Inactive Tab Text",
+                                "5. New Tab BG", "6. New Tab Borders", "7. Scroll Track", "8. Scroll Thumb",
+                                "9. Selection Color", "10. Close Tab Button", "11. Prompt BG", "12. Active Row Highlight",
+                                "13. Menu Scroll Track", "14. Menu Scroll Thumb", "15. Keywords Highlight", 
+                                "16. Boolean/Nil Highlight", "17. Stdlib Highlight", "18. Code Text"
+                            }
+
+                            local keys = {
+                                "bg", "activeTab", "inactiveTab", "inactiveTabText",
+                                "newTabBackground", "newTabBorders", "scrollTrack", "scrollThumb",
+                                "selectColor", "closeTab", "promptBg", "activeRow",
+                                "menuScrollTrack", "menuScrollThumb", "keywordsH", "boolnilH",
+                                "stdlibH", "codeH"
+                            }
+
+                            Menu.show("Edit Color Property:", propNames, function(pIndex)
+                                if not pIndex or not keys[pIndex] then return end
+                                
+                                local key = keys[pIndex]
+                                local curThemeObj = themes[targetThemeIdx]
+                                local currentRGB = curThemeObj[key] and table.concat(curThemeObj[key], ",") or "255,255,255"
+
+                                Prompt.show("Enter RGB for " .. key .. " (R,G,B):", currentRGB, function(input)
+                                    if not input or input == "" then return end
+
+                                    local r, g, b = input:match("(%d+),%s*(%d+),%s*(%d+)")
+                                    if r and g and b then
+                                        themes[targetThemeIdx][key] = {tonumber(r), tonumber(g), tonumber(b)}
+                                        saveCustomThemes()
+                                        platform.window:invalidate()
+                                    end
+                                end)
+                            end)
+                        end
+                    end)
                 end
             end)
-        end)
-    end}
-},
+        end}
+}
+,
     {"Code",
-    {"Go to Line", function()
+        {"Go to Line", function()
             Prompt.show("Go to line: ", "", function(result)
                 local targetLine = tonumber(result)
                 if targetLine then
@@ -477,18 +766,19 @@ menu = {
         end}
     },
     {"File",
-        {"Save All", function()
+        {"Save", function()
             local varNames = var.recall("nidevarnames") or {}
-            for i = 1, #editor.tabs do
-                local varName = "nide_" .. editor.tabs[i].name
-                varName = string.sub(varName, 1, 16) 
-                if not has(varNames, varName) then
-                    table.insert(varNames, varName)
-                end
-                var.store(varName, editor.tabs[i].lines)
+            local activeDoc = current()
+            local varName = string.sub("nide_" .. activeDoc.name, 1, 16) 
+            
+            if not has(varNames, varName) then
+                table.insert(varNames, varName)
+                var.store("nidevarnames", varNames)
             end
-            var.store("nidevarnames", varNames)
+            
+            var.store(varName, activeDoc.lines)
         end},
+
         {"Load", function()
             local varNames = var.recall("nidevarnames") or {}
             if #varNames == 0 then
@@ -526,6 +816,7 @@ menu = {
         end}
     }
 }
+
 toolpalette.register(menu)
 
 function on.paint(gc)
@@ -749,6 +1040,7 @@ end
     end
     Prompt.paint(gc)
     Menu.draw(gc)
+    plugins.triggerHook("onRender", gc)
 end
 
 function on.tabKey()
@@ -1103,3 +1395,6 @@ function on.grabDown(x, y)
 end
 
 timer.start(0.4)
+loadCustomThemes()
+loadPlugins()
+plugins.rebuildMenu()
