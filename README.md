@@ -14,6 +14,8 @@ A simple on-calc editor for TI-Nspire Lua. Has several features in v0.1 like a t
 <img width="320" height="240" alt="nIDE1" src="https://github.com/user-attachments/assets/7179c2a8-3f77-4a93-bba3-add9fe55f0af" />
 <img width="320" height="240" alt="nIDE2" src="https://github.com/user-attachments/assets/2dc40418-d351-4b33-96a5-315a26a04acb" />
 
+# Plugins
+
 The plugins system was added in nIDE v1.1, and here are docs and samples!
 For example, here is how you add a menu function to remove whitespace from the end of lines and format text: 
 
@@ -87,4 +89,32 @@ return {
     }
 }
 ```
-Not much use unless you have a long list of functions, but then you can type them in faster and compile the plugin in another tab, it's just not a wide use case. Enjoy the Plugin system!
+Now more useful in case you package a plugin with a library, but still not super useful. Still can be helpful for larger codebases!
+# Libraries
+
+Use 
+```lua
+libvar = iderequire("docname")
+```
+to use functions of another tab or saved program from the active tab! Follow that simple syntax. For example, here is a geometry library:
+```lua
+local geom = {}
+
+function geom.area(width, height)
+    return width * height
+end
+
+function geom.perimeter(width, height)
+    return (width + height) * 2
+end
+
+return geom
+```
+and you can call its functions through this!
+```lua
+local geo = iderequire("geom")
+print(geo.area(5, 10))
+print(geo.perimeter(5, 10))
+```
+
+Please enjoy the extension to the language itself, in the latest versions of nIDE, with new support for a missing lua feature, require!
