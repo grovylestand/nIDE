@@ -107,7 +107,7 @@ function savePlugins()
     for _, p in ipairs(plugins.list) do
         table.insert(pluginNames, p.name)
         if p.code then
-            var.store("nide_plug_" .. p.name, p.code)
+            var.store("plug_" .. p.name, p.code)
         end
     end
     var.store("nide_plugins", pluginNames)
@@ -188,6 +188,7 @@ function plugins.applyAll()
             break
         end
     end
+    savePlugins()
     editor.currentTheme = recoveredIdx
 end
 
@@ -780,14 +781,16 @@ menu = {
             local varNames = var.recall("nidevarnames") or {}
             local activeDoc = current()
             plugins.triggerHook("onBeforeSave", activeDoc)
-            local varName = string.sub("nide_" .. activeDoc.name, 1, 16) 
+            
+            local varName ="nide_" .. activeDoc.name
             
             if not has(varNames, varName) then
                 table.insert(varNames, varName)
                 var.store("nidevarnames", varNames)
             end
             
-            var.store(varName, activeDoc.lines)
+            local safeStringData = activeDoc.lines
+            var.store(varName, safeStringData)
         end},
 
         {"Load", function()
@@ -802,7 +805,7 @@ menu = {
                     
                     local alreadyOpenIdx = nil
                     for i, tab in ipairs(editor.tabs) do
-                        if tab.name == targetName then
+                        if tab.name == targetName or tab.name == targetName .. ".lua" then
                             alreadyOpenIdx = i
                             break
                         end
@@ -811,9 +814,23 @@ menu = {
                     if alreadyOpenIdx then
                         editor.activeTab = alreadyOpenIdx
                     else
-                        local loadedLines = var.recall(selected) or {""}
+                        local rawData = var.recall(selected) or ""
+                        local loadedLines = {""}
+                        
+                        if type(rawData) == "string" then
+                            loadedLines = {}
+                            for line in string.gmatch(rawData .. "\n", "([^\n]*)\n") do
+                                table.insert(loadedLines, line)
+                            end
+                            if #loadedLines > 1 and loadedLines[#loadedLines] == "" then
+                                table.remove(loadedLines)
+                            end
+                        elseif type(rawData) == "table" then
+                            loadedLines = rawData
+                        end
+                        
                         table.insert(editor.tabs, {
-                            name = targetName,
+                            name = targetName .. ".lua",
                             lines = loadedLines,
                             row = 1,
                             col = 0,
@@ -826,6 +843,7 @@ menu = {
             end)
         end}
     }
+
 }
 
 toolpalette.register(menu)
@@ -1329,34 +1347,37 @@ function on.paste()
     local pasteText = clipboard.getText()
     if not pasteText or pasteText == "" then return end
     
+    deleteSelectedText()
+    
     local doc = current()
     local currentText = doc.lines[doc.row] or ""
     local left = string.sub(currentText, 1, doc.col)
     local right = string.sub(currentText, doc.col + 1)
     
     local pastedLines = {}
-    for line in string.gmatch(pasteText, "[^\r\n]+") do
+    for line in (pasteText .. "\n"):gmatch("([^\r\n]*)\r?\n") do
         table.insert(pastedLines, line)
     end
-    
-    if #pastedLines == 0 then
-        table.insert(pastedLines, "")
+    if #pastedLines > 1 and pastedLines[#pastedLines] == "" then
+        table.remove(pastedLines)
     end
     
     if #pastedLines <= 1 then
-        doc.lines[doc.row] = left .. pasteText .. right
-        doc.col = doc.col + string.len(pasteText)
+        doc.lines[doc.row] = left .. (pastedLines[1] or "") .. right
+        doc.col = doc.col + string.len(pastedLines[1] or "")
     else
-        pastedLines = left .. pastedLines
-        local lastLineIdx = #pastedLines
-        local targetCol = string.len(pastedLines[lastLineIdx])
-        pastedLines[lastLineIdx] = pastedLines[lastLineIdx] .. right
+        local firstLineContent = left .. pastedLines[1]
+        local lastLineContent = pastedLines[#pastedLines] .. right
+        local targetCol = string.len(pastedLines[#pastedLines])
         
-        doc.lines[doc.row] = pastedLines
-        for i = 2, lastLineIdx do
+        doc.lines[doc.row] = firstLineContent
+        
+        for i = 2, #pastedLines - 1 do
             table.insert(doc.lines, doc.row + i - 1, pastedLines[i])
         end
-        doc.row = doc.row + lastLineIdx - 1
+        table.insert(doc.lines, doc.row + #pastedLines - 1, lastLineContent)
+        
+        doc.row = doc.row + #pastedLines - 1
         doc.col = targetCol
     end
     
@@ -1364,6 +1385,7 @@ function on.paste()
     scrollIntoView()
     platform.window:invalidate()
 end
+
 
 
 function on.mouseDown(x, y)
@@ -1408,4 +1430,5 @@ end
 timer.start(0.4)
 loadCustomThemes()
 loadPlugins()
+plugins.applyAll()
 plugins.rebuildMenu()
