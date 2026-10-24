@@ -2,7 +2,7 @@ local SCREEN_WIDTH = 318
 local SCREEN_HEIGHT = 212
 local TAB_BAR_HEIGHT = 24
 local LINE_HEIGHT = 14
-local MARGIN_LEFT = 10
+local MARGIN_LEFT = 28
 local MARGIN_TOP = TAB_BAR_HEIGHT + 6
 local SCROLLBAR_WIDTH = 6
 local VISIBLE_LINES = math.floor((SCREEN_HEIGHT - MARGIN_TOP) / LINE_HEIGHT)
@@ -21,7 +21,7 @@ local autocompleteHint = ""
 local autocompleteFullWord = ""
 local autocompleteMatchLen = 0
 consoleBuffer = {}
-maxLines = 10  
+maxLines = 10
 local themes = {
     {
         name = "Light Mode",
@@ -75,7 +75,7 @@ local editor = {
     },
     currentTheme = 2,
     activeTab = 1,
-    tabCounter = 2, 
+    tabCounter = 2,
     cursorVisible = true,
     font = {family = "sansserif", style = "r", size = 9},
     pendingClick = nil,
@@ -118,11 +118,11 @@ function plugins.applyAll()
     plugins.actions = {}
 
     local activeThemeName = themes[editor.currentTheme] and themes[editor.currentTheme].name or ""
-    
+
     for i = #themes, 3, -1 do
         table.remove(themes, i)
     end
-    
+
     loadCustomThemes()
 
     for _, p in ipairs(plugins.list) do
@@ -152,7 +152,7 @@ function plugins.applyAll()
                             }
                         end
                     end
-                    
+
                     local existingIdx = nil
                     for idx, t in ipairs(themes) do
                         if t.name == themeName then
@@ -160,7 +160,7 @@ function plugins.applyAll()
                             break
                         end
                     end
-                    
+
                     if existingIdx then
                         themes[existingIdx] = builtTheme
                     else
@@ -180,7 +180,7 @@ function plugins.applyAll()
             end
         end
     end
-    
+
     local recoveredIdx = 2
     for idx, t in ipairs(themes) do
         if t.name == activeThemeName then
@@ -361,20 +361,48 @@ function saveCustomThemes()
             end
         end
         if not isFromPlugin then
-            table.insert(customThemes, themes[i])
+            local sourceTheme = themes[i]
+            local packedTheme = { name = sourceTheme.name }
+            for k, v in pairs(sourceTheme) do
+                if k ~= "name" and type(v) == "table" then
+                    packedTheme[k] = table.concat(v, ",")
+                end
+            end
+            table.insert(customThemes, packedTheme)
         end
     end
     var.store("nide_themes", customThemes)
 end
 
+
 function loadCustomThemes()
     local saved = var.recall("nide_themes")
     if saved and type(saved) == "table" then
         for _, t in ipairs(saved) do
-            table.insert(themes, t)
+            local restoredTheme = { name = t.name }
+            for k, v in pairs(t) do
+                if k ~= "name" and type(v) == "string" then
+                    local r, g, b = v:match("(%d+),%s*(%d+),%s*(%d+)")
+                    if r and g and b then
+                        restoredTheme[k] = {tonumber(r), tonumber(g), tonumber(b)}
+                    end
+                end
+            end
+
+            local duplicates = false
+            for _, existing in ipairs(themes) do
+                if existing.name == restoredTheme.name then
+                    duplicates = true
+                    break
+                end
+            end
+            if not duplicates then
+                table.insert(themes, restoredTheme)
+            end
         end
     end
 end
+
 
 loadCustomThemes()
 local function isCharSelected(lineIdx, colIdx)
@@ -537,16 +565,16 @@ Menu = {
         local y = 20
         local visibleCount = math.min(#Menu.options, Menu.maxVisible)
         local menuHeight = 40 + (visibleCount * 20)
-        
+
         gc:setColorRGB(c("promptBg",1),c("promptBg",2),c("promptBg",3))
         gc:fillRect(20, y, 280, menuHeight)
         gc:setColorRGB(c("codeH",1),c("codeH",2),c("codeH",3))
         gc:drawRect(20, y, 280, menuHeight)
-        
+
         gc:setFont("sansserif", "b", 12)
         gc:drawString(Menu.title, 30, y + 10, "top")
         gc:setFont("sansserif", "r", 10)
-        
+
         for i = 0, visibleCount - 1 do
             local itemIdx = Menu.scrollRow + i
             local opt = Menu.options[itemIdx]
@@ -562,20 +590,20 @@ Menu = {
                 end
             end
         end
-        
+
         if #Menu.options > Menu.maxVisible then
             local sbX = 20 + 280 - 10
             local sbY = y + 35
             local sbHeight = visibleCount * 20
-            
+
             gc:setColorRGB(c("menuScrollTrack",1),c("menuScrollTrack",2),c("menuScrollTrack",3))
             gc:fillRect(sbX, sbY, 6, sbHeight)
-            
+
             local thumbHeight = math.max(10, math.floor((Menu.maxVisible / #Menu.options) * sbHeight))
             local maxScrollDist = #Menu.options - Menu.maxVisible
             local scrollPct = (Menu.scrollRow - 1) / maxScrollDist
             local thumbY = sbY + math.floor(scrollPct * (sbHeight - thumbHeight))
-            
+
             gc:setColorRGB(c("menuScrollThumb",1),c("menuScrollThumb",2),c("menuScrollThumb",3))
             gc:fillRect(sbX, thumbY, 6, thumbHeight)
         end
@@ -630,20 +658,20 @@ menu = {
 
             Menu.show("Select or Create Theme:", themeOptions, function(tIndex)
                 if not tIndex then return end
-                
+
                 if tIndex == #themeOptions then
                     local baseOptions = {}
                     for i = 1, #themes do
                         table.insert(baseOptions, themes[i].name or ("Theme " .. i))
                     end
-                    
+
                     Menu.show("Choose a Base Template:", baseOptions, function(bIndex)
                         if not bIndex then return end
                         local selectedBase = themes[bIndex]
-                        
+
                         Prompt.show("Enter Name for New Theme:", "", function(newName)
                             if not newName or newName == "" then return end
-                            
+
                             local newTheme = {}
                             for k, v in pairs(selectedBase) do
                                 if type(v) == "table" then
@@ -651,7 +679,7 @@ menu = {
                                 end
                             end
                             newTheme.name = newName
-                            
+
                             table.insert(themes, newTheme)
                             editor.currentTheme = #themes
                             saveCustomThemes()
@@ -663,7 +691,7 @@ menu = {
                     local actions = {"Activate Theme", "Rename Theme", "Edit Colors"}
                     Menu.show("Theme Actions (" .. themes[targetThemeIdx].name .. "):", actions, function(aIndex)
                         if not aIndex then return end
-                        
+
                         if aIndex == 1 then
                             editor.currentTheme = targetThemeIdx
                             platform.window:invalidate()
@@ -680,7 +708,7 @@ menu = {
                                 "1. Background", "2. Active Tab", "3. Inactive Tab", "4. Inactive Tab Text",
                                 "5. New Tab BG", "6. New Tab Borders", "7. Scroll Track", "8. Scroll Thumb",
                                 "9. Selection Color", "10. Close Tab Button", "11. Prompt BG", "12. Active Row Highlight",
-                                "13. Menu Scroll Track", "14. Menu Scroll Thumb", "15. Keywords Highlight", 
+                                "13. Menu Scroll Track", "14. Menu Scroll Thumb", "15. Keywords Highlight",
                                 "16. Boolean/Nil Highlight", "17. Stdlib Highlight", "18. Code Text"
                             }
 
@@ -694,7 +722,7 @@ menu = {
 
                             Menu.show("Edit Color Property:", propNames, function(pIndex)
                                 if not pIndex or not keys[pIndex] then return end
-                                
+
                                 local key = keys[pIndex]
                                 local curThemeObj = themes[targetThemeIdx]
                                 local currentRGB = curThemeObj[key] and table.concat(curThemeObj[key], ",") or "255,255,255"
@@ -717,7 +745,7 @@ menu = {
         end}
 }
 ,
-    {"Code",
+            {"Code",
         {"Go to Line", function()
             Prompt.show("Go to line: ", "", function(result)
                 local targetLine = tonumber(result)
@@ -729,8 +757,8 @@ menu = {
                     platform.window:invalidate()
                 end
             end)
-        end}
-    },
+        end},
+},
     {"Tabs",
         {"New Tab", function()
             editor.tabCounter = editor.tabCounter + 1
@@ -741,7 +769,7 @@ menu = {
                 col = 17,
                 scrollRow = 1
             })
-            editor.activeTab = #editor.tabs 
+            editor.activeTab = #editor.tabs
             platform.window:invalidate()
         end},
         {"Close Tab", function()
@@ -781,14 +809,14 @@ menu = {
             local varNames = var.recall("nidevarnames") or {}
             local activeDoc = current()
             plugins.triggerHook("onBeforeSave", activeDoc)
-            
+
             local varName ="nide_" .. activeDoc.name
-            
+
             if not has(varNames, varName) then
                 table.insert(varNames, varName)
                 var.store("nidevarnames", varNames)
             end
-            
+
             local safeStringData = activeDoc.lines
             var.store(varName, safeStringData)
         end},
@@ -802,7 +830,7 @@ menu = {
             Menu.show("Select a file to load:", varNames, function(index, selected)
                 if index and selected then
                     local targetName = string.sub(selected, 6)
-                    
+
                     local alreadyOpenIdx = nil
                     for i, tab in ipairs(editor.tabs) do
                         if tab.name == targetName or tab.name == targetName .. ".lua" then
@@ -810,13 +838,13 @@ menu = {
                             break
                         end
                     end
-                    
+
                     if alreadyOpenIdx then
                         editor.activeTab = alreadyOpenIdx
                     else
                         local rawData = var.recall(selected) or ""
                         local loadedLines = {""}
-                        
+
                         if type(rawData) == "string" then
                             loadedLines = {}
                             for line in string.gmatch(rawData .. "\n", "([^\n]*)\n") do
@@ -828,7 +856,7 @@ menu = {
                         elseif type(rawData) == "table" then
                             loadedLines = rawData
                         end
-                        
+
                         table.insert(editor.tabs, {
                             name = targetName .. ".lua",
                             lines = loadedLines,
@@ -841,11 +869,9 @@ menu = {
                     platform.window:invalidate()
                 end
             end)
-        end}
+        end},
     }
-
 }
-
 toolpalette.register(menu)
 
 function on.paint(gc)
@@ -855,7 +881,7 @@ function on.paint(gc)
         local px, py = editor.pendingClick.x, editor.pendingClick.y
         editor.pendingClick = nil
         if py <= TAB_BAR_HEIGHT then
-            local availableWidth = SCREEN_WIDTH - 30 
+            local availableWidth = SCREEN_WIDTH - 30
             local tabWidth = math.floor(availableWidth / #editor.tabs)
             if px >= availableWidth then
                 editor.tabCounter = editor.tabCounter + 1
@@ -866,7 +892,7 @@ function on.paint(gc)
                     col = 17,
                     scrollRow = 1
                 })
-                editor.activeTab = #editor.tabs 
+                editor.activeTab = #editor.tabs
             else
                 local chosenTab = math.floor(px / tabWidth) + 1
                 if chosenTab >= 1 and chosenTab <= #editor.tabs then
@@ -883,7 +909,7 @@ function on.paint(gc)
                     end
                 end
             end
-            doc = current() 
+            doc = current()
         else
             local clickedVisualRow = math.floor((py - MARGIN_TOP) / LINE_HEIGHT)
             local targetRow = current().scrollRow + clickedVisualRow
@@ -945,12 +971,23 @@ function on.paint(gc)
     gc:setColorRGB(c("newTabBorders",1),c("newTabBorders",2),c("newTabBorders",3))
     gc:drawRect(availableWidth, 0, 30, TAB_BAR_HEIGHT)
     gc:drawString("[+]", availableWidth + 6, 4, "top")
-    for i = 0, VISIBLE_LINES - 1 do 
-        local lineIdx = current().scrollRow + i 
-        local lineText = current().lines[lineIdx] 
-        if lineText then 
-            local DRAWROW, yPos = MARGIN_LEFT, MARGIN_TOP + (i * LINE_HEIGHT)
+    for i = 0, VISIBLE_LINES - 1 do
+        local lineIdx = current().scrollRow + i
+        local lineText = current().lines[lineIdx]
+        if lineText then
+            local yPos = MARGIN_TOP + (i * LINE_HEIGHT)
+
+            if editor.currentTheme == 2 then
+                gc:setColorRGB(110, 110, 110)
+            else
+                gc:setColorRGB(140, 140, 140)
+            end
+            local lineNumStr = tostring(lineIdx)
+            gc:drawString(lineNumStr, MARGIN_LEFT - gc:getStringWidth(lineNumStr) - 6, yPos, "top")
+
+            local DRAWROW = MARGIN_LEFT
             local startLine, startCol, endLine, endCol
+
             if current().row < selAnchorLine or (current().row == selAnchorLine and current().col < selAnchorCol) then
                 startLine, startCol = current().row, current().col
                 endLine, endCol = selAnchorLine, selAnchorCol
@@ -977,11 +1014,11 @@ function on.paint(gc)
                 gc:fillRect(sX, yPos, sW, LINE_HEIGHT)
             end
             local charTracker = 0
-            local hintDrawX = nil 
-            for spaces, token in lineText:gmatch("([%s]*)([%w_%p]+)") do 
+            local hintDrawX = nil
+            for spaces, token in lineText:gmatch("([%s]*)([%w_%p]+)") do
                 if spaces and spaces ~= "" then
                     for sIdx = 1, string.len(spaces) do
-                      if charTracker == current().col then hintDrawX = DRAWROW end 
+                      if charTracker == current().col then hintDrawX = DRAWROW end
                         if lineSelStart and lineSelEnd and charTracker >= lineSelStart and charTracker < lineSelEnd then
     gc:setColorRGB(c("bg",1), c("bg",2), c("bg",3))
 else
@@ -1012,10 +1049,10 @@ end
 
                     local syntaxR, syntaxG, syntaxB = c("codeH",1),c("codeH",2),c("codeH",3)
                     if not isSymbol then
-                        if word == "and" or word == "or" or word == "not" or word == "if" or 
-                           word == "then" or word == "else" or word == "elseif" or word == "end" or 
-                           word == "for" or word == "while" or word == "do" or word == "repeat" or 
-                           word == "until" or word == "function" or word == "return" or word == "local" or 
+                        if word == "and" or word == "or" or word == "not" or word == "if" or
+                           word == "then" or word == "else" or word == "elseif" or word == "end" or
+                           word == "for" or word == "while" or word == "do" or word == "repeat" or
+                           word == "until" or word == "function" or word == "return" or word == "local" or
                            word == "break" or word == "in" then
                             syntaxR, syntaxG, syntaxB = c("keywordsH",1),c("keywordsH",2),c("keywordsH",3)
                         elseif word == "true" or word == "false" or word == "nil" then
@@ -1045,13 +1082,13 @@ end
             end
             if lineIdx == current().row and autocompleteHint ~= "" and not isTextSelected then
     local cursorX = MARGIN_LEFT + gc:getStringWidth(lineText:sub(1, current().col))
-    
+
     if editor.currentTheme == 2 then
         gc:setColorRGB(90, 90, 90)
     else
         gc:setColorRGB(160, 160, 160)
     end
-    
+
     gc:drawString(autocompleteHint, cursorX, yPos, "top")
 end
 
@@ -1077,7 +1114,7 @@ function on.tabKey()
     local currentText = doc.lines[doc.row] or ""
     local left = string.sub(currentText, 1, doc.col)
     local right = string.sub(currentText, doc.col + 1)
-    
+
     if autocompleteHint ~= "" then
         doc.lines[doc.row] = left .. autocompleteHint .. right
         doc.col = doc.col + string.len(autocompleteHint)
@@ -1095,19 +1132,19 @@ end
 function on.charIn(char)
     if Prompt.charIn(char) then return end
     deleteSelectedText()
-    
+
     local character = char
     local doc = current()
     local currentText = doc.lines[doc.row] or ""
     local left = string.sub(currentText, 1, doc.col)
     local right = string.sub(currentText, doc.col + 1)
-    
+
     if char == "^2" then character = ":" end
     if char == "exp(" then character = "[" end
     if char == "10^(" then character = "]" end
     if char == "ln(" then character = "{" end
     if char == "log(" then character = "}" end
-    
+
     local nextChar = string.sub(right, 1, 1)
     if (character == ")" or character == "]" or character == "}" or character == '"') and nextChar == character then
         doc.col = doc.col + 1
@@ -1122,41 +1159,141 @@ function on.charIn(char)
     elseif character == "{" then closingPair = "}"
     elseif character == '"' then closingPair = '"'
     end
-    
+
     local newLeft = left .. character
     doc.lines[doc.row] = newLeft .. closingPair .. right
     doc.col = doc.col + string.len(character)
-    
+
     local leadingSpaces, keyword = string.match(newLeft, "^(%s*)([eE][nN][dD])$")
     if not keyword then leadingSpaces, keyword = string.match(newLeft, "^(%s*)([eE][lL][sS][eE])$") end
     if not keyword then leadingSpaces, keyword = string.match(newLeft, "^(%s*)([eE][lL][sS][eE][iI][fF])$") end
-    
+
     if keyword and string.len(leadingSpaces) >= 4 then
         local strippedSpaces = string.sub(leadingSpaces, 1, -5)
         doc.lines[doc.row] = strippedSpaces .. keyword .. closingPair .. right
         doc.col = string.len(strippedSpaces) + string.len(keyword)
     end
-    
+
     local currentWord = string.match(doc.lines[doc.row]:sub(1, doc.col), "([%w_.:]+)$")
-    autocompleteHint = "" 
+    autocompleteHint = ""
     if currentWord and currentWord ~= "" then
         local lastSegment = string.match(currentWord, "([%w_]+)$")
         local prefix
-        
+
         if lastSegment then
             prefix = string.sub(currentWord, 1, string.len(currentWord) - string.len(lastSegment))
         else
             lastSegment = ""
             prefix = currentWord
         end
-        
+
         local keywords = {
-            "assert", "collectgarbage", "error", "_G", "getfenv", "getmetatable", "ipairs", "load", "loadstring", "next", "pairs", "pcall", "print", "rawequal", "rawget", "rawset", "select", "setfenv", "setmetatable", "tonumber", "tostring", "type", "unpack", "_VERSION", "xpcall", "coroutine.create", "coroutine.resume", "coroutine.running", "coroutine.status", "coroutine.wrap", "coroutine.yield", "string.byte", "string.char", "string.dump", "string.find", "string.format", "string.gmatch", "string.gsub", "string.len", "string.lower", "string.match", "string.rep", "string.reverse", "string.sub", "string.upper", "table.concat", "table.insert", "table.maxn", "table.remove", "table.sort", "math.abs", "math.acos", "math.asin", "math.atan", "math.atan2", "math.ceil", "math.cos", "math.cosh", "math.deg", "math.exp", "math.floor", "math.fmod", "math.frexp", "math.huge", "math.ldexp", "math.log", "math.log10", "math.max", "math.min", "math.modf", "math.pi", "math.pow", "math.rad", "math.random", "math.randomseed", "math.sin", "math.sinh", "math.sqrt", "math.tan", "math.tanh", "touch.ppi", "touch.xppi", "touch.yppi", "touch.enabled", "touch.isKeyboardAvailable", "touch.isKeyboardVisible", "touch.showKeyboard", "D2Editor.newRichText", "D2Editor:createChemBox", "D2Editor:createMathBox", "D2Editor:getExpression", "D2Editor:getExpressionSelection", "D2Editor:getText", "D2Editor:hasFocus", "D2Editor:isVisible", "D2Editor:move", "D2Editor:registerFilter", "D2Editor:resize", "D2Editor:setBorder", "D2Editor:setBorderColor", "D2Editor:setColorable", "D2Editor:setDisable2DinRT", "D2Editor:setExpression", "D2Editor:setFocus", "D2Editor:setFontSize", "D2Editor:setMainFont", "D2Editor:setReadOnly", "D2Editor:setSelectable", "D2Editor:setSizeChangeListener", "D2Editor:setText", "D2Editor:setTextChangeListener", "D2Editor:setTextColor", "D2Editor:setVisible", "D2Editor:setWordWrapWidth", "class", "clipboard.addText", "clipboard.getText", "cursor.set", "cursor.hide", "cursor.show", "document.markChanged", "on.activate", "on.arrowDown", "on.arrowKey", "on.arrowLeft", "on.arrowRight", "on.arrowUp", "on.charIn", "on.backspaceKey", "on.backTabKey", "on.clearKey", "on.construction", "on.contextMenu", "on.copy", "on.create", "on.createMathBox", "on.cut", "on.deactivate", "on.deleteKey", "on.destroy", "on.enterKey", "on.escapeKey", "on.getFocus", "on.getSymbolList", "on.grabDown", "on.grabUp", "on.help", "on.keyboardDown", "on.keyboardUp", "on.loseFocus", "on.mouseDown", "on.mouseMove", "on.mouseUp", "on.paint", "on.paste", "on.propertiesChanged", "on.resize", "on.restore", "on.returnKey", "on.rightMouseDown", "on.rightMouseUp", "on.save", "on.tabKey", "on.timer", "on.varChange", "image.new", "image:copy", "image:height", "image:rotate", "image:width", "locale.name", "math.eval", "math.evalStr", "math.getEvalSettings", "math.setEvalSettings", "platform.apiLevel", "platform.hw", "platform.isColorDisplay", "platform.isDeviceModeRendering", "platform.isTabletModeRendering", "platform.registerErrorHandler", "platform.window.height", "platform.window.width", "platform.window.invalidate", "platform.window.setBackgroundColor", "platform.window.setFocus", "platform.window.getScrollHeight", "platform.window.setScrollHeight", "platform.window.displayInvalidatedRectangles", "platform.withGC", "platform.getDeviceID", "string.split", "string.uchar", "string.usub", "string.pack", "string.unpack", "timer.getMilliSecCounter", "timer.start", "timer.stop", "toolpalette.register", "toolpalette.enable", "toolpalette.enableCut", "toolpalette.enableCopy", "toolpalette.enablePaste", "var.list", "var.makeNumericList", "var.monitor", "var.recall", "var.recallAt", "var.recallStr", "var.store", "var.storeAt", "var.unmonitor", "physics.INFINITY", "physics.momentForBox", "physics.momentForCircle", "physics.momentForPoly", "physics.momentForSegment", "physics.Vect", "physics.Vect:add", "physics.Vect:clamp", "physics.Vect:cross", "physics.Vect:dist", "physics.Vect:distsq", "physics.Vect:dot", "physics.Vect:eql", "physics.Vect:length", "physics.Vect:lengthsq", "physics.Vect:lerp", "physics.Vect:lerpconst", "physics.Vect:mult", "physics.Vect:near", "physics.Vect:neg", "physics.Vect:normalize", "physics.Vect:normalizeSafe", "physics.Vect:perp", "physics.Vect:project", "physics.Vect:rotate", "physics.Vect:rperp", "physics.Vect:setx", "physics.Vect:sety", "physics.Vect:slerp", "physics.Vect:slerpconst", "physics.Vect:sub", "physics.Vect:toangle", "physics.Vect:unrotate", "physics.Vect:x", "physics.Vect:y", "physics.BB", "physics.BB:b", "physics.BB:clampVect", "physics.BB:containsBB", "physics.BB:containsVect", "physics.BB:expand", "physics.BB:intersects", "physics.BB:l", "physics.BB:merge", "physics.BB:setb", "physics.BB:r", "physics.BB:setl", "physics.BB:setr", "physics.BB:sett", "physics.BB:t", "physics.BB:wrapVect", "physics.Body", "physics.Body:activate", "physics.Body:angle", "physics.Body:angVel", "physics.Body:applyForce", "physics.Body:applyImpulse", "physics.Body:data", "physics.Body:force", "physics.Body:isRogue", "physics.Body:isSleeping", "physics.Body:local2World", "physics.Body:kineticEnergy", "physics.Body:mass", "physics.Body:moment", "physics.Body:pos", "physics.Body:resetForces", "physics.Body:rot", "physics.Body:setAngle", "physics.Body:setAngVel", "physics.Body:setData", "physics.Body:setForce", "physics.Body:setMass", "physics.Body:setMoment", "physics.Body:setPos", "physics.Body:setPositionFunc", "physics.Body:setTorque", "physics.Body:setVel", "physics.Body:setVelocityFunc", "physics.Body:setVLimit", "physics.Body:setWLimit", "physics.Body:sleep", "physics.Body:sleepWithGroup", "physics.Body:torque", "physics.Body:updatePosition", "physics.Body:updateVelocity", "physics.Body:vel", "physics.Body:vLimit", "physics.Body:wLimit", "physics.Body:world2Local", "physics.Shape:BB", "physics.Shape:body", "physics.Shape:collisionType", "physics.Shape:data", "physics.Shape:friction", "physics.Shape:group", "physics.Shape:layers", "physics.Shape:rawBB", "physics.Shape:restitution", "physics.Shape:sensor", "physics.Shape:setCollisionType", "physics.Shape:setData", "physics.Shape:setFriction", "physics.Shape:setGroup", "physics.Shape:setLayers", "physics.Shape:setRestitution", "physics.Shape:setSensor", "physics.Shape:setSurfaceV", "physics.Shape:surfaceV", "physics.CircleShape", "physics.CircleShape:offset", "physics.CircleShape:radius", "physics.PolyShape", "physics.PolyShape:numVerts", "physics.PolyShape:points", "physics.PolyShape:vert", "physics.SegmentShape", "physics.SegmentShape:a", "physics.SegmentShape:b", "physics.SegmentShape:normal", "physics.SegmentShape:radius", "physics.Space", "physics.Space:addBody", "physics.Space:addConstraint", "physics.Space:addCollisionHandler", "physics.Space:addPostStepCallback", "physics.Space:addShape", "physics.Space:addStaticShape", "physics.Space:damping", "physics.Space:data", "physics.Space:elasticIterations", "physics.Space:gravity", "physics.Space:idleSpeedThreshold", "physics.Space:iterations", "physics.Space:rehashShape", "physics.Space:rehashStatic", "physics.Space:removeBody", "physics.Space:removeConstraint", "physics.Space:removeShape", "physics.Space:removeStaticShape", "physics.Space:resizeActiveHash", "physics.Space:resizeStaticHash", "physics.Space:setDamping", "physics.Space:setData", "physics.Space:setElasticIterations", "physics.Space:setGravity", "physics.Space:setIdleSpeedThreshold", "physics.Space:setIterations", "physics.Space:setSleepTimeThreshold", "physics.Space:sleepTimeThreshold", "physics.Space:step", "physics.Constraint:Damped Rotary Spring", "physics.Constraint:Damped Spring", "physics.Constraint:Gear Joint", "physics.Constraint:Groove Joint", "physics.Constraint:Pin Joint", "physics.Constraint:Pivot Joint", "physics.Constraint:Ratchet Joint", "physics.Constraint:Rotary Limit Joint", "physics.Constraint:Simple Motor", "physics.Constraint:Slide Joints", "physics.Arbiter:#", "physics.Arbiter:a", "physics.Arbiter:b", "physics.Arbiter:bodies", "physics.Arbiter:depth", "physics.Arbiter:elasticity", "physics.Arbiter:friction", "physics.Arbiter:impulse", "physics.Arbiter:isFirstContact", "physics.Arbiter:normal", "physics.Arbiter:point", "physics.Arbiter:setElasticity", "physics.Arbiter:setFriction", "physics.Arbiter:shapes", "physics.Arbiter:totalImpulse", "physics.Arbiter:totalImpulseWithFriction", "physics.Space:pointQuery", "physics.Space:segmentQuery", "physics.Space:pointQueryFirst", "physics.Space:segmentQueryFirst", "physics.SegmentQueryInfo:hitDist", "physics.SegmentQueryInfo:hitPoint", "bluetooth.LE.addStateListener", "bluetooth.LE.removeStateListener", "bluetooth.LE.pack", "bluetooth.LE.unpack", "bluetooth.LE.Central.startScanning", "bluetooth.LE.Central.stopScanning", "bluetooth.LE.Central.isScanning", "bluetooth.Peripheral:getName", "bluetooth.Peripheral:getState", "bluetooth.Peripheral:connect", "bluetooth.Peripheral:disconnect", "bluetooth.Peripheral:discoverServices", "bluetooth.Peripheral:getServices", "bluetooth.Service:getUUID", "bluetooth.Service:discoverCharacteristics", "bluetooth.Service:getCharacteristics", "bluetooth.Characteristic:getUUID", "bluetooth.Characteristic:setValueUpdateListener", "bluetooth.Characteristic:setWriteCompleteListener", "bluetooth.Characteristic:read", "bluetooth.Characteristic:setNotify", "bluetooth.Characteristic:getValue", "bluetooth.Characteristic:write", "asi.require", "asi.addStateListener", "asi.removeStateListener", "asi.isScanning", "asi.startScanning", "asi.stopScanning", "asi.Port:getName", "asi.Port:getIdentifier", "asi.Port:getState", "asi.Port:setBaudRate", "asi.Port:connect", "asi.Port:disconnect", "asi.Port:setWriteListener", "asi.Port:write", "asi.Port:setReadListener", "asi.Port:setReadTimeout", "asi.Port:read", "asi.Port:getValue", "gc:clipRect", "gc:drawArc", "gc:drawImage", "gc:drawLine", "gc:drawPolyLine", "gc:drawRect", "gc:drawString", "gc:fillArc", "gc:fillPolygon", "gc:fillRect", "gc:getStringHeight", "gc:getStringWidth", "gc:setColorRGB", "gc:setFont", "gc:setPen"
+            "assert", "collectgarbage", "error", "_G", "getfenv", "getmetatable", "ipairs", "load", "loadstring", "next",
+            "pairs", "pcall", "print", "rawequal", "rawget", "rawset", "select", "setfenv", "setmetatable", "tonumber",
+            "tostring", "type", "unpack", "_VERSION", "xpcall", "coroutine.create", "coroutine.resume",
+            "coroutine.running", "coroutine.status", "coroutine.wrap", "coroutine.yield", "string.byte", "string.char",
+            "string.dump", "string.find", "string.format", "string.gmatch", "string.gsub", "string.len", "string.lower",
+            "string.match", "string.rep", "string.reverse", "string.sub", "string.upper", "table.concat", "table.insert",
+            "table.maxn", "table.remove", "table.sort", "math.abs", "math.acos", "math.asin", "math.atan", "math.atan2",
+            "math.ceil", "math.cos", "math.cosh", "math.deg", "math.exp", "math.floor", "math.fmod", "math.frexp",
+            "math.huge", "math.ldexp", "math.log", "math.log10", "math.max", "math.min", "math.modf", "math.pi",
+            "math.pow", "math.rad", "math.random", "math.randomseed", "math.sin", "math.sinh", "math.sqrt", "math.tan",
+            "math.tanh", "touch.ppi", "touch.xppi", "touch.yppi", "touch.enabled", "touch.isKeyboardAvailable",
+            "touch.isKeyboardVisible", "touch.showKeyboard", "D2Editor.newRichText", "D2Editor:createChemBox",
+            "D2Editor:createMathBox", "D2Editor:getExpression", "D2Editor:getExpressionSelection", "D2Editor:getText",
+            "D2Editor:hasFocus", "D2Editor:isVisible", "D2Editor:move", "D2Editor:registerFilter", "D2Editor:resize",
+            "D2Editor:setBorder", "D2Editor:setBorderColor", "D2Editor:setColorable", "D2Editor:setDisable2DinRT",
+            "D2Editor:setExpression", "D2Editor:setFocus", "D2Editor:setFontSize", "D2Editor:setMainFont",
+            "D2Editor:setReadOnly", "D2Editor:setSelectable", "D2Editor:setSizeChangeListener", "D2Editor:setText",
+            "D2Editor:setTextChangeListener", "D2Editor:setTextColor", "D2Editor:setVisible", "D2Editor:setWordWrapWidth",
+            "class", "clipboard.addText", "clipboard.getText", "cursor.set", "cursor.hide", "cursor.show",
+            "document.markChanged", "on.activate", "on.arrowDown", "on.arrowKey", "on.arrowLeft", "on.arrowRight",
+            "on.arrowUp", "on.charIn", "on.backspaceKey", "on.backTabKey", "on.clearKey", "on.construction",
+            "on.contextMenu", "on.copy", "on.create", "on.createMathBox", "on.cut", "on.deactivate", "on.deleteKey",
+            "on.destroy", "on.enterKey", "on.escapeKey", "on.getFocus", "on.getSymbolList", "on.grabDown", "on.grabUp",
+            "on.help", "on.keyboardDown", "on.keyboardUp", "on.loseFocus", "on.mouseDown", "on.mouseMove", "on.mouseUp",
+            "on.paint", "on.paste", "on.propertiesChanged", "on.resize", "on.restore", "on.returnKey",
+            "on.rightMouseDown", "on.rightMouseUp", "on.save", "on.tabKey", "on.timer", "on.varChange", "image.new",
+            "image:copy", "image:height", "image:rotate", "image:width", "locale.name", "math.eval", "math.evalStr",
+            "math.getEvalSettings", "math.setEvalSettings", "platform.apiLevel", "platform.hw", "platform.isColorDisplay",
+            "platform.isDeviceModeRendering", "platform.isTabletModeRendering", "platform.registerErrorHandler",
+            "platform.window.height", "platform.window.width", "platform.window.invalidate",
+            "platform.window.setBackgroundColor", "platform.window.setFocus", "platform.window.getScrollHeight",
+            "platform.window.setScrollHeight", "platform.window.displayInvalidatedRectangles", "platform.withGC",
+            "platform.getDeviceID", "string.split", "string.uchar", "string.usub", "string.pack", "string.unpack",
+            "timer.getMilliSecCounter", "timer.start", "timer.stop", "toolpalette.register", "toolpalette.enable",
+            "toolpalette.enableCut", "toolpalette.enableCopy", "toolpalette.enablePaste", "var.list",
+            "var.makeNumericList", "var.monitor", "var.recall", "var.recallAt", "var.recallStr", "var.store",
+            "var.storeAt", "var.unmonitor", "physics.INFINITY", "physics.momentForBox", "physics.momentForCircle",
+            "physics.momentForPoly", "physics.momentForSegment", "physics.Vect", "physics.Vect:add", "physics.Vect:clamp",
+            "physics.Vect:cross", "physics.Vect:dist", "physics.Vect:distsq", "physics.Vect:dot", "physics.Vect:eql",
+            "physics.Vect:length", "physics.Vect:lengthsq", "physics.Vect:lerp", "physics.Vect:lerpconst",
+            "physics.Vect:mult", "physics.Vect:near", "physics.Vect:neg", "physics.Vect:normalize",
+            "physics.Vect:normalizeSafe", "physics.Vect:perp", "physics.Vect:project", "physics.Vect:rotate",
+            "physics.Vect:rperp", "physics.Vect:setx", "physics.Vect:sety", "physics.Vect:slerp",
+            "physics.Vect:slerpconst", "physics.Vect:sub", "physics.Vect:toangle", "physics.Vect:unrotate",
+            "physics.Vect:x", "physics.Vect:y", "physics.BB", "physics.BB:b", "physics.BB:clampVect",
+            "physics.BB:containsBB", "physics.BB:containsVect", "physics.BB:expand", "physics.BB:intersects",
+            "physics.BB:l", "physics.BB:merge", "physics.BB:setb", "physics.BB:r", "physics.BB:setl", "physics.BB:setr",
+            "physics.BB:sett", "physics.BB:t", "physics.BB:wrapVect", "physics.Body", "physics.Body:activate",
+            "physics.Body:angle", "physics.Body:angVel", "physics.Body:applyForce", "physics.Body:applyImpulse",
+            "physics.Body:data", "physics.Body:force", "physics.Body:isRogue", "physics.Body:isSleeping",
+            "physics.Body:local2World", "physics.Body:kineticEnergy", "physics.Body:mass", "physics.Body:moment",
+            "physics.Body:pos", "physics.Body:resetForces", "physics.Body:rot", "physics.Body:setAngle",
+            "physics.Body:setAngVel", "physics.Body:setData", "physics.Body:setForce", "physics.Body:setMass",
+            "physics.Body:setMoment", "physics.Body:setPos", "physics.Body:setPositionFunc", "physics.Body:setTorque",
+            "physics.Body:setVel", "physics.Body:setVelocityFunc", "physics.Body:setVLimit", "physics.Body:setWLimit",
+            "physics.Body:sleep", "physics.Body:sleepWithGroup", "physics.Body:torque", "physics.Body:updatePosition",
+            "physics.Body:updateVelocity", "physics.Body:vel", "physics.Body:vLimit", "physics.Body:wLimit",
+            "physics.Body:world2Local", "physics.Shape:BB", "physics.Shape:body", "physics.Shape:collisionType",
+            "physics.Shape:data", "physics.Shape:friction", "physics.Shape:group", "physics.Shape:layers",
+            "physics.Shape:rawBB", "physics.Shape:restitution", "physics.Shape:sensor", "physics.Shape:setCollisionType",
+            "physics.Shape:setData", "physics.Shape:setFriction", "physics.Shape:setGroup", "physics.Shape:setLayers",
+            "physics.Shape:setRestitution", "physics.Shape:setSensor", "physics.Shape:setSurfaceV",
+            "physics.Shape:surfaceV", "physics.CircleShape", "physics.CircleShape:offset", "physics.CircleShape:radius",
+            "physics.PolyShape", "physics.PolyShape:numVerts", "physics.PolyShape:points", "physics.PolyShape:vert",
+            "physics.SegmentShape", "physics.SegmentShape:a", "physics.SegmentShape:b", "physics.SegmentShape:normal",
+            "physics.SegmentShape:radius", "physics.Space", "physics.Space:addBody", "physics.Space:addConstraint",
+            "physics.Space:addCollisionHandler", "physics.Space:addPostStepCallback", "physics.Space:addShape",
+            "physics.Space:addStaticShape", "physics.Space:damping", "physics.Space:data",
+            "physics.Space:elasticIterations", "physics.Space:gravity", "physics.Space:idleSpeedThreshold",
+            "physics.Space:iterations", "physics.Space:rehashShape", "physics.Space:rehashStatic",
+            "physics.Space:removeBody", "physics.Space:removeConstraint", "physics.Space:removeShape",
+            "physics.Space:removeStaticShape", "physics.Space:resizeActiveHash", "physics.Space:resizeStaticHash",
+            "physics.Space:setDamping", "physics.Space:setData", "physics.Space:setElasticIterations",
+            "physics.Space:setGravity", "physics.Space:setIdleSpeedThreshold", "physics.Space:setIterations",
+            "physics.Space:setSleepTimeThreshold", "physics.Space:sleepTimeThreshold", "physics.Space:step",
+            "physics.Constraint:Damped Rotary Spring", "physics.Constraint:Damped Spring",
+            "physics.Constraint:Gear Joint", "physics.Constraint:Groove Joint", "physics.Constraint:Pin Joint",
+            "physics.Constraint:Pivot Joint", "physics.Constraint:Ratchet Joint", "physics.Constraint:Rotary Limit Joint",
+            "physics.Constraint:Simple Motor", "physics.Constraint:Slide Joints", "physics.Arbiter:#",
+            "physics.Arbiter:a", "physics.Arbiter:b", "physics.Arbiter:bodies", "physics.Arbiter:depth",
+            "physics.Arbiter:elasticity", "physics.Arbiter:friction", "physics.Arbiter:impulse",
+            "physics.Arbiter:isFirstContact", "physics.Arbiter:normal", "physics.Arbiter:point",
+            "physics.Arbiter:setElasticity", "physics.Arbiter:setFriction", "physics.Arbiter:shapes",
+            "physics.Arbiter:totalImpulse", "physics.Arbiter:totalImpulseWithFriction", "physics.Space:pointQuery",
+            "physics.Space:segmentQuery", "physics.Space:pointQueryFirst", "physics.Space:segmentQueryFirst",
+            "physics.SegmentQueryInfo:hitDist", "physics.SegmentQueryInfo:hitPoint", "bluetooth.LE.addStateListener",
+            "bluetooth.LE.removeStateListener", "bluetooth.LE.pack", "bluetooth.LE.unpack",
+            "bluetooth.LE.Central.startScanning", "bluetooth.LE.Central.stopScanning", "bluetooth.LE.Central.isScanning",
+            "bluetooth.Peripheral:getName", "bluetooth.Peripheral:getState", "bluetooth.Peripheral:connect",
+            "bluetooth.Peripheral:disconnect", "bluetooth.Peripheral:discoverServices",
+            "bluetooth.Peripheral:getServices", "bluetooth.Service:getUUID", "bluetooth.Service:discoverCharacteristics",
+            "bluetooth.Service:getCharacteristics", "bluetooth.Characteristic:getUUID",
+            "bluetooth.Characteristic:setValueUpdateListener", "bluetooth.Characteristic:setWriteCompleteListener",
+            "bluetooth.Characteristic:read", "bluetooth.Characteristic:setNotify", "bluetooth.Characteristic:getValue",
+            "bluetooth.Characteristic:write", "asi.require", "asi.addStateListener", "asi.removeStateListener",
+            "asi.isScanning", "asi.startScanning", "asi.stopScanning", "asi.Port:getName", "asi.Port:getIdentifier",
+            "asi.Port:getState", "asi.Port:setBaudRate", "asi.Port:connect", "asi.Port:disconnect",
+            "asi.Port:setWriteListener", "asi.Port:write", "asi.Port:setReadListener", "asi.Port:setReadTimeout",
+            "asi.Port:read", "asi.Port:getValue", "gc:clipRect", "gc:drawArc", "gc:drawImage", "gc:drawLine",
+            "gc:drawPolyLine", "gc:drawRect", "gc:drawString", "gc:fillArc", "gc:fillPolygon", "gc:fillRect",
+            "gc:getStringHeight", "gc:getStringWidth", "gc:setColorRGB", "gc:setFont", "gc:setPen"
         }
-                for _, kw in ipairs(keywords) do
+        for _, kw in ipairs(keywords) do
             if string.sub(kw, 1, string.len(prefix)) == prefix then
                 local kwSegment = string.sub(kw, string.len(prefix) + 1)
-                
+
                 if lastSegment == "" or (string.sub(kwSegment, 1, string.len(lastSegment)) == lastSegment and kwSegment ~= lastSegment) then
                     autocompleteHint = string.sub(kwSegment, string.len(lastSegment) + 1)
                     autocompleteFullWord = kw
@@ -1166,6 +1303,7 @@ function on.charIn(char)
             end
         end
     end
+    platform.window:invalidate()
 end
 
 
@@ -1174,31 +1312,31 @@ function on.enterKey()
     if Menu.enter() then return end
     if Prompt.enter() then return end
     deleteSelectedText()
-    
+
     autocompleteHint = ""
-    
+
     local doc = current()
     local currentText = doc.lines[doc.row] or ""
     local left = string.sub(currentText, 1, doc.col)
     local right = string.sub(currentText, doc.col + 1)
     local leadingSpaces = string.match(left, "^(%s*)") or ""
     local trimmedLeft = string.gsub(left, "%s*$", "")
-    
-    if string.match(trimmedLeft, "%f[%w]then$") or 
-       string.match(trimmedLeft, "%f[%w]do$") or 
-       string.match(trimmedLeft, "%f[%w]function%s*%b()$") or 
+
+    if string.match(trimmedLeft, "%f[%w]then$") or
+       string.match(trimmedLeft, "%f[%w]do$") or
+       string.match(trimmedLeft, "%f[%w]function%s*%b()$") or
        string.match(trimmedLeft, "%f[%w]function%s*[%w_.:]*%s*%b()$") or
-       string.match(trimmedLeft, "%f[%w]repeat$") or 
-       string.match(trimmedLeft, "%f[%w]else$") or 
+       string.match(trimmedLeft, "%f[%w]repeat$") or
+       string.match(trimmedLeft, "%f[%w]else$") or
        string.match(trimmedLeft, "%f[%w]elseif%s.*$") then
         leadingSpaces = leadingSpaces .. "    "
     end
-    
+
     doc.lines[doc.row] = left
     table.insert(doc.lines, doc.row + 1, leadingSpaces .. right)
     doc.row = doc.row + 1
     doc.col = string.len(leadingSpaces)
-    
+
     scrollIntoView()
     platform.window:invalidate()
 end
@@ -1212,7 +1350,7 @@ function on.backspaceKey()
         platform.window:invalidate()
         return
     end
-    
+
     local doc = current()
     local currentText = doc.lines[doc.row] or ""
     if doc.col > 0 then
@@ -1234,12 +1372,12 @@ function on.backspaceKey()
         table.remove(doc.lines, doc.row)
         doc.row = doc.row - 1
     end
-    
+
     local currentWord = string.match(doc.lines[doc.row]:sub(1, doc.col), "([%w_.:]+)$")
     autocompleteHint = ""
     if currentWord and currentWord ~= "" then
         local keywords = {
-            "function", "local", "return", "if", "then", "else", "elseif", 
+            "function", "local", "return", "if", "then", "else", "elseif",
             "end", "for", "while", "do", "repeat", "until", "break", "true", "false", "nil"
         }
         for _, kw in ipairs(keywords) do
@@ -1249,7 +1387,7 @@ function on.backspaceKey()
             end
         end
     end
-    
+
     scrollIntoView()
     platform.window:invalidate()
 end
@@ -1258,20 +1396,20 @@ end
 function on.arrowKey(direction)
     if Prompt.active then return end
     if Menu.active then
-        if direction == "up" then 
-            Menu.arrowUp() 
-        elseif direction == "down" then 
-            Menu.arrowDown() 
+        if direction == "up" then
+            Menu.arrowUp()
+        elseif direction == "down" then
+            Menu.arrowDown()
         end
         return
     end
-    if isTextSelected then 
-        handleSelectionKeys(direction) 
-        return 
+    if isTextSelected then
+        handleSelectionKeys(direction)
+        return
     end
-    
+
     local doc = current()
-    isTextSelected = false 
+    isTextSelected = false
     if direction == "up" then
         if doc.row > 1 then
             doc.row = doc.row - 1
@@ -1330,11 +1468,11 @@ function on.copy()
     else
         local firstLineText = doc.lines[startLine] or ""
         copiedText = string.sub(firstLineText, startCol + 1) .. "\n"
-        
+
         for i = startLine + 1, endLine - 1 do
             copiedText = copiedText .. (doc.lines[i] or "") .. "\n"
         end
-        
+
         local lastLineText = doc.lines[endLine] or ""
         copiedText = copiedText .. string.sub(lastLineText, 1, endCol)
     end
@@ -1346,14 +1484,14 @@ end
 function on.paste()
     local pasteText = clipboard.getText()
     if not pasteText or pasteText == "" then return end
-    
+
     deleteSelectedText()
-    
+
     local doc = current()
     local currentText = doc.lines[doc.row] or ""
     local left = string.sub(currentText, 1, doc.col)
     local right = string.sub(currentText, doc.col + 1)
-    
+
     local pastedLines = {}
     for line in (pasteText .. "\n"):gmatch("([^\r\n]*)\r?\n") do
         table.insert(pastedLines, line)
@@ -1361,7 +1499,7 @@ function on.paste()
     if #pastedLines > 1 and pastedLines[#pastedLines] == "" then
         table.remove(pastedLines)
     end
-    
+
     if #pastedLines <= 1 then
         doc.lines[doc.row] = left .. (pastedLines[1] or "") .. right
         doc.col = doc.col + string.len(pastedLines[1] or "")
@@ -1369,18 +1507,18 @@ function on.paste()
         local firstLineContent = left .. pastedLines[1]
         local lastLineContent = pastedLines[#pastedLines] .. right
         local targetCol = string.len(pastedLines[#pastedLines])
-        
+
         doc.lines[doc.row] = firstLineContent
-        
+
         for i = 2, #pastedLines - 1 do
             table.insert(doc.lines, doc.row + i - 1, pastedLines[i])
         end
         table.insert(doc.lines, doc.row + #pastedLines - 1, lastLineContent)
-        
+
         doc.row = doc.row + #pastedLines - 1
         doc.col = targetCol
     end
-    
+
     editor.shouldWrap = true
     scrollIntoView()
     platform.window:invalidate()
@@ -1411,7 +1549,7 @@ function on.save()
     local varNames = var.recall("nidevarnames") or {}
     for i = 1, #editor.tabs do
         local varName = "nide_" .. editor.tabs[i].name
-        varName = string.sub(varName, 1, 16) 
+        varName = string.sub(varName, 1, 16)
         if not has(varNames, varName) then
             table.insert(varNames, varName)
         end
@@ -1427,7 +1565,6 @@ function on.grabDown(x, y)
     platform.window:invalidate()
 end
 
-timer.start(0.4)
 loadCustomThemes()
 loadPlugins()
 plugins.applyAll()
