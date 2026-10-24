@@ -643,10 +643,13 @@ menu = {
         end}
     },
         {"View",
-        {"Toggle Theme", function()
-            editor.currentTheme = (editor.currentTheme % #themes) + 1
-            platform.window:invalidate()
-        end},
+            {"Toggle Theme", function()
+                editor.currentTheme = (editor.currentTheme % #themes) + 1
+                if themes[editor.currentTheme] and themes[editor.currentTheme].name then
+                    var.store("nide_active_theme", themes[editor.currentTheme].name)
+                end
+                platform.window:invalidate()
+            end},
         {"Themes Management", function()
             local themeOptions = {}
             for i = 1, #themes do
@@ -694,7 +697,9 @@ menu = {
 
                         if aIndex == 1 then
                             editor.currentTheme = targetThemeIdx
+                            var.store("nide_active_theme", themes[targetThemeIdx].name)
                             platform.window:invalidate()
+
                         elseif aIndex == 2 then
                             Prompt.show("Enter new theme name:", themes[targetThemeIdx].name, function(newName)
                                 if newName and newName ~= "" then
@@ -1546,6 +1551,11 @@ end
 
 function on.save()
     saveCustomThemes()
+
+    if themes[editor.currentTheme] and themes[editor.currentTheme].name then
+        var.store("nide_active_theme", themes[editor.currentTheme].name)
+    end
+
     local varNames = var.recall("nidevarnames") or {}
     for i = 1, #editor.tabs do
         local varName = "nide_" .. editor.tabs[i].name
@@ -1558,14 +1568,25 @@ function on.save()
     var.store("nidevarnames", varNames)
 end
 
+
 function on.grabDown(x, y)
     isTextSelected = not isTextSelected
     selAnchorLine = current().row
     selAnchorCol = current().col
     platform.window:invalidate()
 end
-
+timer.start(0.4)
 loadCustomThemes()
 loadPlugins()
 plugins.applyAll()
+local savedThemeName = var.recall("nide_active_theme")
+if type(savedThemeName) == "string" then
+    for idx, t in ipairs(themes) do
+        if t.name == savedThemeName then
+            editor.currentTheme = idx
+            break
+        end
+    end
+end
+
 plugins.rebuildMenu()
