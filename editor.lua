@@ -20,6 +20,9 @@ local localClipboard = ""
 local autocompleteHint = ""
 local autocompleteFullWord = ""
 local autocompleteMatchLen = 0
+local indentSetting = 4
+local softWrapEnabled = true
+
 consoleBuffer = {}
 maxLines = 10
 local themes = {
@@ -66,7 +69,8 @@ local themes = {
         boolnilH = {220, 162, 111},
         stdlibH = {78, 201, 176},
         codeH = {212, 212, 212}
-    }}
+    }
+}
 
 local editor = {
     tabs = {
@@ -188,8 +192,10 @@ function plugins.applyAll()
             break
         end
     end
-    savePlugins()
+
     editor.currentTheme = recoveredIdx
+
+    savePlugins()
 end
 
 function plugins.rebuildMenu()
@@ -215,7 +221,6 @@ function plugins.rebuildMenu()
 
     toolpalette.register(menu)
 end
-
 
 function plugins.registerFromCode(name, codeStr, autoEnable, doSave)
     local chunk, err = loadstring(codeStr)
@@ -305,10 +310,10 @@ function createPluginTemplate()
     platform.window:invalidate()
 end
 
-
 function c(themeColor,num)
   return themes[editor.currentTheme][themeColor][num]
 end
+
 function current()
     return editor.tabs[editor.activeTab]
 end
@@ -350,61 +355,99 @@ local function deleteSelectedText()
     isTextSelected = false
     return true
 end
+
 function saveCustomThemes()
-    local customThemes = {}
+    local serializedData = ""
     for i = 3, #themes do
         local isFromPlugin = false
-        for _, p in ipairs(plugins.list) do
-            if p.enabled and p.themePacks and p.themePacks[themes[i].name] then
-                isFromPlugin = true
-                break
+        if plugins and plugins.list then
+            for _, p in ipairs(plugins.list) do
+                if p.enabled and p.themePacks and p.themePacks[themes[i].name] then
+                    isFromPlugin = true
+                    break
+                end
             end
         end
         if not isFromPlugin then
             local sourceTheme = themes[i]
-            local packedTheme = { name = sourceTheme.name }
+            local themeStr = "name:" .. sourceTheme.name
             for k, v in pairs(sourceTheme) do
-                if k ~= "name" and type(v) == "table" then
-                    packedTheme[k] = table.concat(v, ",")
+                if k ~= "name" and type(v) == "table" and v[1] and v[2] and v[3] then
+                    themeStr = themeStr .. ";" .. k .. ":" .. string.format("%d,%d,%d", tonumber(v[1]) or 0, tonumber(v[2]) or 0, tonumber(v[3]) or 0)
                 end
             end
-            table.insert(customThemes, packedTheme)
+            if serializedData == "" then
+                serializedData = themeStr
+            else
+                serializedData = serializedData .. "|" .. themeStr
+            end
         end
     end
-    var.store("nide_themes", customThemes)
-end
 
+    var.store("nide_themes", serializedData)
+
+    if themes[editor.currentTheme] and themes[editor.currentTheme].name then
+        var.store("nide_active_theme", themes[editor.currentTheme].name)
+    end
+end
 
 function loadCustomThemes()
     local saved = var.recall("nide_themes")
-    if saved and type(saved) == "table" then
-        for _, t in ipairs(saved) do
-            local restoredTheme = { name = t.name }
-            for k, v in pairs(t) do
-                if k ~= "name" and type(v) == "string" then
-                    local r, g, b = v:match("(%d+),%s*(%d+),%s*(%d+)")
-                    if r and g and b then
-                        restoredTheme[k] = {tonumber(r), tonumber(g), tonumber(b)}
+    if saved and type(saved) == "string" and saved ~= "" then
+        for themeStr in string.gmatch(saved .. "|", "([^|]*)|") do
+            if themeStr and themeStr ~= "" then
+                local restoredTheme = {}
+                for pair in string.gmatch(themeStr .. ";", "([^;]*);") do
+                    local key, val = pair:match("([^:]+):([^:]+)")
+                    if key and val then
+                        if key == "name" then
+                            restoredTheme.name = val
+                        else
+                            local r, g, b = val:match("(%d+),(%d+),(%d+)")
+                            if r and g and b then
+                                restoredTheme[key] = {tonumber(r), tonumber(g), tonumber(b)}
+                            end
+                        end
+                    end
+                end
+
+                if restoredTheme.name then
+                    local existingIdx = nil
+                    for idx, existing in ipairs(themes) do
+                        if existing.name == restoredTheme.name then
+                            existingIdx = idx
+                            break
+                        end
+                    end
+
+                    if existingIdx then
+                        themes[existingIdx] = restoredTheme
+                    else
+                        table.insert(themes, restoredTheme)
                     end
                 end
             end
+        end
+    end
 
-            local duplicates = false
-            for _, existing in ipairs(themes) do
-                if existing.name == restoredTheme.name then
-                    duplicates = true
-                    break
-                end
+    local savedThemeName = var.recall("nide_active_theme")
+    if type(savedThemeName) == "string" then
+        local found = false
+        for idx, t in ipairs(themes) do
+            if t.name == savedThemeName then
+                editor.currentTheme = idx
+                found = true
+                break
             end
-            if not duplicates then
-                table.insert(themes, restoredTheme)
-            end
+        end
+        if not found then
+            editor.currentTheme = 2
         end
     end
 end
 
-
 loadCustomThemes()
+
 local function isCharSelected(lineIdx, colIdx)
     if not isTextSelected then return false end
     local doc = current()
@@ -642,14 +685,14 @@ menu = {
             createPluginTemplate()
         end}
     },
-        {"View",
-            {"Toggle Theme", function()
-                editor.currentTheme = (editor.currentTheme % #themes) + 1
-                if themes[editor.currentTheme] and themes[editor.currentTheme].name then
-                    var.store("nide_active_theme", themes[editor.currentTheme].name)
-                end
-                platform.window:invalidate()
-            end},
+    {"View",
+        {"Toggle Theme", function()
+            editor.currentTheme = (editor.currentTheme % #themes) + 1
+            if themes[editor.currentTheme] and themes[editor.currentTheme].name then
+                var.store("nide_active_theme", themes[editor.currentTheme].name)
+            end
+            platform.window:invalidate()
+        end},
         {"Themes Management", function()
             local themeOptions = {}
             for i = 1, #themes do
@@ -748,9 +791,8 @@ menu = {
                 end
             end)
         end}
-}
-,
-            {"Code",
+    },
+    {"Code",
         {"Go to Line", function()
             Prompt.show("Go to line: ", "", function(result)
                 local targetLine = tonumber(result)
@@ -763,7 +805,34 @@ menu = {
                 end
             end)
         end},
-},
+        {"Find & Replace", function()
+            Prompt.show("Find:", "", function(findStr)
+                if not findStr or findStr == "" then return end
+                Prompt.show("Replace with:", "", function(replaceStr)
+                    local doc = current()
+                    for i, line in ipairs(doc.lines) do
+                        doc.lines[i] = string.gsub(line, findStr, replaceStr)
+                    end
+                    platform.window:invalidate()
+                end)
+            end)
+        end},
+    },
+    {"Settings",
+        {"Toggle Wrap", function()
+            softWrapEnabled = not softWrapEnabled
+            platform.window:invalidate()
+        end},
+        {"Indentation", function()
+            local options = {"2 Spaces", "4 Spaces","6 Spaces","8 Spaces"}
+            Menu.show("Select Tab Width:", options, function(idx)
+                if idx == 1 then indentSetting = 2
+                elseif idx == 2 then indentSetting = 4
+                elseif idx == 3 then indentSetting = 6
+                elseif idx == 4 then indentSetting = 8 end
+            end)
+        end}
+    },
     {"Tabs",
         {"New Tab", function()
             editor.tabCounter = editor.tabCounter + 1
@@ -782,7 +851,7 @@ menu = {
                 table.remove(editor.tabs, editor.activeTab)
                 if editor.activeTab > #editor.tabs then
                     editor.activeTab = #editor.tabs
-                elseif editor.activeTab > 1 then
+                elseif editor.activeTab == chosenTab and editor.activeTab > 1 then
                     editor.activeTab = editor.activeTab - 1
                 end
                 platform.window:invalidate()
@@ -877,6 +946,7 @@ menu = {
         end},
     }
 }
+
 toolpalette.register(menu)
 
 function on.paint(gc)
@@ -976,23 +1046,17 @@ function on.paint(gc)
     gc:setColorRGB(c("newTabBorders",1),c("newTabBorders",2),c("newTabBorders",3))
     gc:drawRect(availableWidth, 0, 30, TAB_BAR_HEIGHT)
     gc:drawString("[+]", availableWidth + 6, 4, "top")
+
+
     for i = 0, VISIBLE_LINES - 1 do
         local lineIdx = current().scrollRow + i
         local lineText = current().lines[lineIdx]
         if lineText then
             local yPos = MARGIN_TOP + (i * LINE_HEIGHT)
 
-            if editor.currentTheme == 2 then
-                gc:setColorRGB(110, 110, 110)
-            else
-                gc:setColorRGB(140, 140, 140)
-            end
-            local lineNumStr = tostring(lineIdx)
-            gc:drawString(lineNumStr, MARGIN_LEFT - gc:getStringWidth(lineNumStr) - 6, yPos, "top")
-
-            local DRAWROW = MARGIN_LEFT
+            local maxTextWidth = SCREEN_WIDTH - MARGIN_LEFT - SCROLLBAR_WIDTH - 4
+            local visualLineIndex = 0
             local startLine, startCol, endLine, endCol
-
             if current().row < selAnchorLine or (current().row == selAnchorLine and current().col < selAnchorCol) then
                 startLine, startCol = current().row, current().col
                 endLine, endCol = selAnchorLine, selAnchorCol
@@ -1000,105 +1064,118 @@ function on.paint(gc)
                 startLine, startCol = selAnchorLine, selAnchorCol
                 endLine, endCol = current().row, current().col
             end
-            local lineSelStart, lineSelEnd = nil, nil
-            if isTextSelected and lineIdx >= startLine and lineIdx <= endLine then
-                if lineIdx == startLine and lineIdx == endLine then
-                    lineSelStart, lineSelEnd = startCol, endCol
-                elseif lineIdx == startLine then
-                    lineSelStart, lineSelEnd = startCol, string.len(lineText)
-                elseif lineIdx == endLine then
-                    lineSelStart, lineSelEnd = 0, endCol
-                else
-                    lineSelStart, lineSelEnd = 0, string.len(lineText)
-                end
-            end
-            if lineSelStart and lineSelEnd and lineSelEnd > lineSelStart then
-                local sX = MARGIN_LEFT + gc:getStringWidth(lineText:sub(1, lineSelStart))
-                local sW = gc:getStringWidth(lineText:sub(lineSelStart + 1, lineSelEnd))
-                gc:setColorRGB(c("selectColor",1),c("selectColor",2),c("selectColor",3))
-                gc:fillRect(sX, yPos, sW, LINE_HEIGHT)
-            end
-            local charTracker = 0
-            local hintDrawX = nil
-            for spaces, token in lineText:gmatch("([%s]*)([%w_%p]+)") do
-                if spaces and spaces ~= "" then
-                    for sIdx = 1, string.len(spaces) do
-                      if charTracker == current().col then hintDrawX = DRAWROW end
-                        if lineSelStart and lineSelEnd and charTracker >= lineSelStart and charTracker < lineSelEnd then
-    gc:setColorRGB(c("bg",1), c("bg",2), c("bg",3))
-else
-    gc:setColorRGB(c("codeH",1), c("codeH",2), c("codeH",3))
-end
 
-                        local ch = spaces:sub(sIdx, sIdx)
-                        gc:drawString(ch, DRAWROW, yPos, "top")
-                        DRAWROW = DRAWROW + gc:getStringWidth(ch)
-                        charTracker = charTracker + 1
-                    end
-                end
+            local physicalRow = current().scrollRow
+            while physicalRow <= #current().lines and visualLineIndex < VISIBLE_LINES do
+                local currentLineText = current().lines[physicalRow]
+                local subLines = {}
 
-                local subPos = 1
-                while subPos <= string.len(token) do
-                    local wStart, wEnd = token:find("^([%w_]+)", subPos)
-                    local word = ""
-                    local isSymbol = false
-
-                    if wStart then
-                        word = token:sub(wStart, wEnd)
-                        subPos = wEnd + 1
-                    else
-                        word = token:sub(subPos, subPos)
-                        isSymbol = true
-                        subPos = subPos + 1
-                    end
-
-                    local syntaxR, syntaxG, syntaxB = c("codeH",1),c("codeH",2),c("codeH",3)
-                    if not isSymbol then
-                        if word == "and" or word == "or" or word == "not" or word == "if" or
-                           word == "then" or word == "else" or word == "elseif" or word == "end" or
-                           word == "for" or word == "while" or word == "do" or word == "repeat" or
-                           word == "until" or word == "function" or word == "return" or word == "local" or
-                           word == "break" or word == "in" then
-                            syntaxR, syntaxG, syntaxB = c("keywordsH",1),c("keywordsH",2),c("keywordsH",3)
-                        elseif word == "true" or word == "false" or word == "nil" then
-                            syntaxR, syntaxG, syntaxB = c("boolnilH",1),c("boolnilH",2),c("boolnilH",3)
-                        elseif word == "assert" or word=="collectgarbage" or word=="error" or word=="_G" or word=="getfenv" or word=="getmetatable" or word=="ipairs" or word=="load" or word=="loadstring"  or word=="next" or word=="pairs" or word=="pcall" or word=="print" or word=="rawequal" or word=="rawget" or word=="rawset" or word=="select" or word=="setfenv" or word=="setmetatable" or word=="tonumber" or word=="tostring" or word=="type" or word=="unpack" or word=="xpcall" or word=="_VERSION" then
-                            syntaxR, syntaxG, syntaxB = c("stdlibH",1),c("stdlibH",2),c("stdlibH",3)
-                        end
-                    end
-
-                    for wIdx = 1, string.len(word) do
-                        if lineSelStart and lineSelEnd and charTracker >= lineSelStart and charTracker < lineSelEnd then
-                            gc:setColorRGB(c("activeTab",1),c("activeTab",2),c("activeTab",3))
+                if softWrapEnabled then
+                    local currentSubLine = ""
+                    for i = 1, string.len(currentLineText) do
+                        local char = string.sub(currentLineText, i, i)
+                        if gc:getStringWidth(currentSubLine .. char) > maxTextWidth then
+                            table.insert(subLines, {text = currentSubLine, startChar = i - string.len(currentSubLine)})
+                            currentSubLine = char
                         else
-                            gc:setColorRGB(syntaxR, syntaxG, syntaxB)
+                            currentSubLine = currentSubLine .. char
                         end
-                        local ch = word:sub(wIdx, wIdx)
-                        gc:drawString(ch, DRAWROW, yPos, "top")
-                        DRAWROW = DRAWROW + gc:getStringWidth(ch)
-                        charTracker = charTracker + 1
+                    end
+                    table.insert(subLines, {text = currentSubLine, startChar = string.len(currentLineText) - string.len(currentSubLine) + 1})
+                else
+                    table.insert(subLines, {text = currentLineText, startChar = 1})
+                end
+                local wordMap = {}
+                for pos_str, word in string.gmatch(currentLineText, "()([%w_]+)") do
+                    local pos = tonumber(pos_str)
+                    local wType = "codeH"
+                    if word == "and" or word == "or" or word == "not" or word == "if" or
+                       word == "then" or word == "else" or word == "elseif" or word == "end" or
+                       word == "for" or word == "while" or word == "do" or word == "repeat" or
+                       word == "until" or word == "function" or word == "return" or word == "local" or
+                       word == "break" or word == "in" then
+                        wType = "keywordsH"
+                    elseif word == "true" or word == "false" or word == "nil" then
+                        wType = "boolnilH"
+                    elseif word == "assert" or word=="_G" or word=="ipairs" or word=="pairs" or word=="pcall" or word=="print" or word=="tonumber" or word=="tostring" or word=="type" then
+                        wType = "stdlibH"
+                    end
+
+                    for k = pos, pos + string.len(word) - 1 do
+                        wordMap[k] = wType
                     end
                 end
+
+
+                for subIdx, subLineInfo in ipairs(subLines) do
+                    if visualLineIndex >= VISIBLE_LINES then break end
+                    local yPos = MARGIN_TOP + (visualLineIndex * LINE_HEIGHT)
+
+                    if subIdx == 1 then
+                        if editor.currentTheme == 2 then gc:setColorRGB(110, 110, 110) else gc:setColorRGB(140, 140, 140) end
+                        local lineNumStr = tostring(physicalRow)
+                        gc:drawString(lineNumStr, MARGIN_LEFT - gc:getStringWidth(lineNumStr) - 6, yPos, "top")
+                    end
+
+                    local DRAWROW = MARGIN_LEFT
+                    local textLen = string.len(subLineInfo.text)
+
+                    for chIdx = 1, textLen do
+                        local globalCharIdx = subLineInfo.startChar + chIdx - 1
+                        local char = string.sub(subLineInfo.text, chIdx, chIdx)
+
+                        local isSelected = false
+                        if isTextSelected and physicalRow >= startLine and physicalRow <= endLine then
+                            if startLine == endLine then
+                                isSelected = ((globalCharIdx - 1) >= startCol and (globalCharIdx - 1) < endCol)
+                            elseif physicalRow == startLine then
+                                isSelected = ((globalCharIdx - 1) >= startCol)
+                            elseif physicalRow == endLine then
+                                isSelected = ((globalCharIdx - 1) < endCol)
+                            else
+                                isSelected = true
+                            end
+                        end
+
+                        if isSelected then
+                            gc:setColorRGB(c("selectColor",1), c("selectColor",2), c("selectColor",3))
+                            gc:fillRect(DRAWROW, yPos, gc:getStringWidth(char), LINE_HEIGHT)
+                            gc:setColorRGB(c("bg",1), c("bg",2), c("bg",3))
+                        else
+                            local themeKey = wordMap[globalCharIdx] or "codeH"
+                            gc:setColorRGB(c(themeKey,1), c(themeKey,2), c(themeKey,3))
+                        end
+
+                        gc:drawString(char, DRAWROW, yPos, "top")
+
+                        if physicalRow == current().row and (globalCharIdx - 1) == current().col and editor.cursorVisible and not isTextSelected then
+                            gc:setColorRGB(c("codeH",1), c("codeH",2), c("codeH",3))
+                            gc:fillRect(DRAWROW, yPos + 1, 1, LINE_HEIGHT - 1)
+                        end
+
+                        if physicalRow == current().row and (globalCharIdx - 1) == current().col and autocompleteHint ~= "" and not isTextSelected then
+                            if editor.currentTheme == 2 then gc:setColorRGB(90, 90, 90) else gc:setColorRGB(160, 160, 160) end
+                            gc:drawString(autocompleteHint, DRAWROW, yPos, "top")
+                        end
+
+                        DRAWROW = DRAWROW + gc:getStringWidth(char)
+                    end
+
+                    if physicalRow == current().row and (current().col == string.len(currentLineText)) and (subLineInfo.startChar + textLen > string.len(currentLineText)) and editor.cursorVisible and not isTextSelected then
+                        gc:setColorRGB(c("codeH",1), c("codeH",2), c("codeH",3))
+                        gc:fillRect(DRAWROW, yPos + 1, 1, LINE_HEIGHT - 1)
+                    end
+
+                    visualLineIndex = visualLineIndex + 1
+                end
+                physicalRow = physicalRow + 1
             end
-            if lineIdx == current().row and editor.cursorVisible and not isTextSelected then
-                local cursorX = MARGIN_LEFT + gc:getStringWidth(lineText:sub(1, current().col))
-                gc:setColorRGB(c("codeH",1),c("codeH",2),c("codeH",3))
-                gc:fillRect(cursorX, yPos + 1, 1, LINE_HEIGHT - 1)
-            end
-            if lineIdx == current().row and autocompleteHint ~= "" and not isTextSelected then
-    local cursorX = MARGIN_LEFT + gc:getStringWidth(lineText:sub(1, current().col))
-
-    if editor.currentTheme == 2 then
-        gc:setColorRGB(90, 90, 90)
-    else
-        gc:setColorRGB(160, 160, 160)
-    end
-
-    gc:drawString(autocompleteHint, cursorX, yPos, "top")
-end
-
         end
     end
+
+
+
+
     if #current().lines > VISIBLE_LINES then
         local trackHeight = SCREEN_HEIGHT - MARGIN_TOP - 4
         local thumbHeight = math.max(15, math.floor((VISIBLE_LINES / #current().lines) * trackHeight))
@@ -1109,6 +1186,7 @@ end
         gc:setColorRGB(c("scrollThumb",1),c("scrollThumb",2),c("scrollThumb",3))
         gc:fillRect(SCREEN_WIDTH - SCROLLBAR_WIDTH - 2, thumbY, SCROLLBAR_WIDTH, thumbHeight)
     end
+
     Prompt.paint(gc)
     Menu.draw(gc)
     plugins.triggerHook("onRender", gc)
@@ -1119,7 +1197,6 @@ function on.tabKey()
     local currentText = doc.lines[doc.row] or ""
     local left = string.sub(currentText, 1, doc.col)
     local right = string.sub(currentText, doc.col + 1)
-
     if autocompleteHint ~= "" then
         doc.lines[doc.row] = left .. autocompleteHint .. right
         doc.col = doc.col + string.len(autocompleteHint)
@@ -1127,9 +1204,9 @@ function on.tabKey()
         platform.window:invalidate()
         return
     end
-
-    doc.lines[doc.row] = left .. "    " .. right
-    doc.col = doc.col + 4
+    local spaces = string.rep(" ", indentSetting)
+    doc.lines[doc.row] = left .. spaces .. right
+    doc.col = doc.col + indentSetting
     platform.window:invalidate()
 end
 
@@ -1311,22 +1388,17 @@ function on.charIn(char)
     platform.window:invalidate()
 end
 
-
-
 function on.enterKey()
     if Menu.enter() then return end
     if Prompt.enter() then return end
     deleteSelectedText()
-
     autocompleteHint = ""
-
     local doc = current()
     local currentText = doc.lines[doc.row] or ""
     local left = string.sub(currentText, 1, doc.col)
     local right = string.sub(currentText, doc.col + 1)
     local leadingSpaces = string.match(left, "^(%s*)") or ""
     local trimmedLeft = string.gsub(left, "%s*$", "")
-
     if string.match(trimmedLeft, "%f[%w]then$") or
        string.match(trimmedLeft, "%f[%w]do$") or
        string.match(trimmedLeft, "%f[%w]function%s*%b()$") or
@@ -1334,14 +1406,12 @@ function on.enterKey()
        string.match(trimmedLeft, "%f[%w]repeat$") or
        string.match(trimmedLeft, "%f[%w]else$") or
        string.match(trimmedLeft, "%f[%w]elseif%s.*$") then
-        leadingSpaces = leadingSpaces .. "    "
+        leadingSpaces = leadingSpaces .. string.rep(" ", indentSetting)
     end
-
     doc.lines[doc.row] = left
     table.insert(doc.lines, doc.row + 1, leadingSpaces .. right)
     doc.row = doc.row + 1
     doc.col = string.len(leadingSpaces)
-
     scrollIntoView()
     platform.window:invalidate()
 end
@@ -1397,7 +1467,6 @@ function on.backspaceKey()
     platform.window:invalidate()
 end
 
-
 function on.arrowKey(direction)
     if Prompt.active then return end
     if Menu.active then
@@ -1447,7 +1516,6 @@ function on.arrowKey(direction)
     platform.window:invalidate()
 end
 
-
 function on.copy()
     local doc = current()
     if not isTextSelected then
@@ -1484,7 +1552,6 @@ function on.copy()
 
     clipboard.addText(copiedText)
 end
-
 
 function on.paste()
     local pasteText = clipboard.getText()
@@ -1529,8 +1596,6 @@ function on.paste()
     platform.window:invalidate()
 end
 
-
-
 function on.mouseDown(x, y)
     editor.pendingClick = {x = x, y = y}
     platform.window:invalidate()
@@ -1568,17 +1633,18 @@ function on.save()
     var.store("nidevarnames", varNames)
 end
 
-
 function on.grabDown(x, y)
     isTextSelected = not isTextSelected
     selAnchorLine = current().row
     selAnchorCol = current().col
     platform.window:invalidate()
 end
+
 timer.start(0.4)
 loadCustomThemes()
 loadPlugins()
 plugins.applyAll()
+
 local savedThemeName = var.recall("nide_active_theme")
 if type(savedThemeName) == "string" then
     for idx, t in ipairs(themes) do
