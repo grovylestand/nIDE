@@ -1372,17 +1372,25 @@ function on.charIn(char)
             "gc:drawPolyLine", "gc:drawRect", "gc:drawString", "gc:fillArc", "gc:fillPolygon", "gc:fillRect",
             "gc:getStringHeight", "gc:getStringWidth", "gc:setColorRGB", "gc:setFont", "gc:setPen"
         }
+        local matches = {}
         for _, kw in ipairs(keywords) do
             if string.sub(kw, 1, string.len(prefix)) == prefix then
                 local kwSegment = string.sub(kw, string.len(prefix) + 1)
-
                 if lastSegment == "" or (string.sub(kwSegment, 1, string.len(lastSegment)) == lastSegment and kwSegment ~= lastSegment) then
-                    autocompleteHint = string.sub(kwSegment, string.len(lastSegment) + 1)
-                    autocompleteFullWord = kw
-                    autocompleteMatchLen = string.len(currentWord)
-                    break
+                    table.insert(matches, kw)
                 end
             end
+        end
+        if #matches == 1 then
+            local kwSegment = string.sub(matches[1], string.len(prefix) + 1)
+            autocompleteHint = string.sub(kwSegment, string.len(lastSegment) + 1)
+            autocompleteFullWord = matches[1]
+            autocompleteMatchLen = string.len(currentWord)
+        elseif #matches > 1 then
+            local kwSegment = string.sub(matches[1], string.len(prefix) + 1)
+            autocompleteHint = string.sub(kwSegment, string.len(lastSegment) + 1) .. " (" .. #matches .. ")"
+            autocompleteFullWord = matches[1]
+            autocompleteMatchLen = string.len(currentWord)
         end
     end
     platform.window:invalidate()
@@ -1639,6 +1647,148 @@ function on.grabDown(x, y)
     selAnchorCol = current().col
     platform.window:invalidate()
 end
+
+function on.returnKey()
+    if Menu.active then
+        return Menu.enter()
+    end
+
+    local doc = current()
+    local currentText = doc.lines[doc.row] or ""
+    local currentWord = string.match(currentText:sub(1, doc.col), "([%w_.:]+)$")
+    if not currentWord or currentWord == "" then return end
+
+    local lastSegment = string.match(currentWord, "([%w_]+)$") or ""
+    local prefix = string.sub(currentWord, 1, string.len(currentWord) - string.len(lastSegment))
+
+    local keywords = {
+        "assert", "collectgarbage", "error", "_G", "getfenv", "getmetatable", "ipairs", "load", "loadstring", "next",
+        "pairs", "pcall", "print", "rawequal", "rawget", "rawset", "select", "setfenv", "setmetatable", "tonumber",
+        "tostring", "type", "unpack", "_VERSION", "xpcall", "coroutine.create", "coroutine.resume",
+        "coroutine.running", "coroutine.status", "coroutine.wrap", "coroutine.yield", "string.byte", "string.char",
+        "string.dump", "string.find", "string.format", "string.gmatch", "string.gsub", "string.len", "string.lower",
+        "string.match", "string.rep", "string.reverse", "string.sub", "string.upper", "table.concat", "table.insert",
+        "table.maxn", "table.remove", "table.sort", "math.abs", "math.acos", "math.asin", "math.atan", "math.atan2",
+        "math.ceil", "math.cos", "math.cosh", "math.deg", "math.exp", "math.floor", "math.fmod", "math.frexp",
+        "math.huge", "math.ldexp", "math.log", "math.log10", "math.max", "math.min", "math.modf", "math.pi",
+        "math.pow", "math.rad", "math.random", "math.randomseed", "math.sin", "math.sinh", "math.sqrt", "math.tan",
+        "math.tanh", "touch.ppi", "touch.xppi", "touch.yppi", "touch.enabled", "touch.isKeyboardAvailable",
+        "touch.isKeyboardVisible", "touch.showKeyboard", "D2Editor.newRichText", "D2Editor:createChemBox",
+        "D2Editor:createMathBox", "D2Editor:getExpression", "D2Editor:getExpressionSelection", "D2Editor:getText",
+        "D2Editor:hasFocus", "D2Editor:isVisible", "D2Editor:move", "D2Editor:registerFilter", "D2Editor:resize",
+        "D2Editor:setBorder", "D2Editor:setBorderColor", "D2Editor:setColorable", "D2Editor:setDisable2DinRT",
+        "D2Editor:setExpression", "D2Editor:setFocus", "D2Editor:setFontSize", "D2Editor:setMainFont",
+        "D2Editor:setReadOnly", "D2Editor:setSelectable", "D2Editor:setSizeChangeListener", "D2Editor:setText",
+        "D2Editor:setTextChangeListener", "D2Editor:setTextColor", "D2Editor:setVisible", "D2Editor:setWordWrapWidth",
+        "class", "clipboard.addText", "clipboard.getText", "cursor.set", "cursor.hide", "cursor.show",
+        "document.markChanged", "on.activate", "on.arrowDown", "on.arrowKey", "on.arrowLeft", "on.arrowRight",
+        "on.arrowUp", "on.charIn", "on.backspaceKey", "on.backTabKey", "on.clearKey", "on.construction",
+        "on.contextMenu", "on.copy", "on.create", "on.createMathBox", "on.cut", "on.deactivate", "on.deleteKey",
+        "on.destroy", "on.enterKey", "on.escapeKey", "on.getFocus", "on.getSymbolList", "on.grabDown", "on.grabUp",
+        "on.help", "on.keyboardDown", "on.keyboardUp", "on.loseFocus", "on.mouseDown", "on.mouseMove", "on.mouseUp",
+        "on.paint", "on.paste", "on.propertiesChanged", "on.resize", "on.restore", "on.returnKey",
+        "on.rightMouseDown", "on.rightMouseUp", "on.save", "on.tabKey", "on.timer", "on.varChange", "image.new",
+        "image:copy", "image:height", "image:rotate", "image:width", "locale.name", "math.eval", "math.evalStr",
+        "math.getEvalSettings", "math.setEvalSettings", "platform.apiLevel", "platform.hw", "platform.isColorDisplay",
+        "platform.isDeviceModeRendering", "platform.isTabletModeRendering", "platform.registerErrorHandler",
+        "platform.window.height", "platform.window.width", "platform.window.invalidate",
+        "platform.window.setBackgroundColor", "platform.window.setFocus", "platform.window.getScrollHeight",
+        "platform.window.setScrollHeight", "platform.window.displayInvalidatedRectangles", "platform.withGC",
+        "platform.getDeviceID", "string.split", "string.uchar", "string.usub", "string.pack", "string.unpack",
+        "timer.getMilliSecCounter", "timer.start", "timer.stop", "toolpalette.register", "toolpalette.enable",
+        "toolpalette.enableCut", "toolpalette.enableCopy", "toolpalette.enablePaste", "var.list",
+        "var.makeNumericList", "var.monitor", "var.recall", "var.recallAt", "var.recallStr", "var.store",
+        "var.storeAt", "var.unmonitor", "physics.INFINITY", "physics.momentForBox", "physics.momentForCircle",
+        "physics.momentForPoly", "physics.momentForSegment", "physics.Vect", "physics.Vect:add", "physics.Vect:clamp",
+        "physics.Vect:cross", "physics.Vect:dist", "physics.Vect:distsq", "physics.Vect:dot", "physics.Vect:eql",
+        "physics.Vect:length", "physics.Vect:lengthsq", "physics.Vect:lerp", "physics.Vect:lerpconst",
+        "physics.Vect:mult", "physics.Vect:near", "physics.Vect:neg", "physics.Vect:normalize",
+        "physics.Vect:normalizeSafe", "physics.Vect:perp", "physics.Vect:project", "physics.Vect:rotate",
+        "physics.Vect:rperp", "physics.Vect:setx", "physics.Vect:sety", "physics.Vect:slerp",
+        "physics.Vect:slerpconst", "physics.Vect:sub", "physics.Vect:toangle", "physics.Vect:unrotate",
+        "physics.Vect:x", "physics.Vect:y", "physics.BB", "physics.BB:b", "physics.BB:clampVect",
+        "physics.BB:containsBB", "physics.BB:containsVect", "physics.BB:expand", "physics.BB:intersects",
+        "physics.BB:l", "physics.BB:merge", "physics.BB:setb", "physics.BB:r", "physics.BB:setl", "physics.BB:setr",
+        "physics.BB:sett", "physics.BB:t", "physics.BB:wrapVect", "physics.Body", "physics.Body:activate",
+        "physics.Body:angle", "physics.Body:angVel", "physics.Body:applyForce", "physics.Body:applyImpulse",
+        "physics.Body:data", "physics.Body:force", "physics.Body:isRogue", "physics.Body:isSleeping",
+        "physics.Body:local2World", "physics.Body:kineticEnergy", "physics.Body:mass", "physics.Body:moment",
+        "physics.Body:pos", "physics.Body:resetForces", "physics.Body:rot", "physics.Body:setAngle",
+        "physics.Body:setAngVel", "physics.Body:setData", "physics.Body:setForce", "physics.Body:setMass",
+        "physics.Body:setMoment", "physics.Body:setPos", "physics.Body:setPositionFunc", "physics.Body:setTorque",
+        "physics.Body:setVel", "physics.Body:setVelocityFunc", "physics.Body:setVLimit", "physics.Body:setWLimit",
+        "physics.Body:sleep", "physics.Body:sleepWithGroup", "physics.Body:torque", "physics.Body:updatePosition",
+        "physics.Body:updateVelocity", "physics.Body:vel", "physics.Body:vLimit", "physics.Body:wLimit",
+        "physics.Body:world2Local", "physics.Shape:BB", "physics.Shape:body", "physics.Shape:collisionType",
+        "physics.Shape:data", "physics.Shape:friction", "physics.Shape:group", "physics.Shape:layers",
+        "physics.Shape:rawBB", "physics.Shape:restitution", "physics.Shape:sensor", "physics.Shape:setCollisionType",
+        "physics.Shape:setData", "physics.Shape:setFriction", "physics.Shape:setGroup", "physics.Shape:setLayers",
+        "physics.Shape:setRestitution", "physics.Shape:setSensor", "physics.Shape:setSurfaceV",
+        "physics.Shape:surfaceV", "physics.CircleShape", "physics.CircleShape:offset", "physics.CircleShape:radius",
+        "physics.PolyShape", "physics.PolyShape:numVerts", "physics.PolyShape:points", "physics.PolyShape:vert",
+        "physics.SegmentShape", "physics.SegmentShape:a", "physics.SegmentShape:b", "physics.SegmentShape:normal",
+        "physics.SegmentShape:radius", "physics.Space", "physics.Space:addBody", "physics.Space:addConstraint",
+        "physics.Space:addCollisionHandler", "physics.Space:addPostStepCallback", "physics.Space:addShape",
+        "physics.Space:addStaticShape", "physics.Space:damping", "physics.Space:data",
+        "physics.Space:elasticIterations", "physics.Space:gravity", "physics.Space:idleSpeedThreshold",
+        "physics.Space:iterations", "physics.Space:rehashShape", "physics.Space:rehashStatic",
+        "physics.Space:removeBody", "physics.Space:removeConstraint", "physics.Space:removeShape",
+        "physics.Space:removeStaticShape", "physics.Space:resizeActiveHash", "physics.Space:resizeStaticHash",
+        "physics.Space:setDamping", "physics.Space:setData", "physics.Space:setElasticIterations",
+        "physics.Space:setGravity", "physics.Space:setIdleSpeedThreshold", "physics.Space:setIterations",
+        "physics.Space:setSleepTimeThreshold", "physics.Space:sleepTimeThreshold", "physics.Space:step",
+        "physics.Constraint:Damped Rotary Spring", "physics.Constraint:Damped Spring",
+        "physics.Constraint:Gear Joint", "physics.Constraint:Groove Joint", "physics.Constraint:Pin Joint",
+        "physics.Constraint:Pivot Joint", "physics.Constraint:Ratchet Joint", "physics.Constraint:Rotary Limit Joint",
+        "physics.Constraint:Simple Motor", "physics.Constraint:Slide Joints", "physics.Arbiter:#",
+        "physics.Arbiter:a", "physics.Arbiter:b", "physics.Arbiter:bodies", "physics.Arbiter:depth",
+        "physics.Arbiter:elasticity", "physics.Arbiter:friction", "physics.Arbiter:impulse",
+        "physics.Arbiter:isFirstContact", "physics.Arbiter:normal", "physics.Arbiter:point",
+        "physics.Arbiter:setElasticity", "physics.Arbiter:setFriction", "physics.Arbiter:shapes",
+        "physics.Arbiter:totalImpulse", "physics.Arbiter:totalImpulseWithFriction", "physics.Space:pointQuery",
+        "physics.Space:segmentQuery", "physics.Space:pointQueryFirst", "physics.Space:segmentQueryFirst",
+        "physics.SegmentQueryInfo:hitDist", "physics.SegmentQueryInfo:hitPoint", "bluetooth.LE.addStateListener",
+        "bluetooth.LE.removeStateListener", "bluetooth.LE.pack", "bluetooth.LE.unpack",
+        "bluetooth.LE.Central.startScanning", "bluetooth.LE.Central.stopScanning", "bluetooth.LE.Central.isScanning",
+        "bluetooth.Peripheral:getName", "bluetooth.Peripheral:getState", "bluetooth.Peripheral:connect",
+        "bluetooth.Peripheral:disconnect", "bluetooth.Peripheral:discoverServices",
+        "bluetooth.Peripheral:getServices", "bluetooth.Service:getUUID", "bluetooth.Service:discoverCharacteristics",
+        "bluetooth.Service:getCharacteristics", "bluetooth.Characteristic:getUUID",
+        "bluetooth.Characteristic:setValueUpdateListener", "bluetooth.Characteristic:setWriteCompleteListener",
+        "bluetooth.Characteristic:read", "bluetooth.Characteristic:setNotify", "bluetooth.Characteristic:getValue",
+        "bluetooth.Characteristic:write", "asi.require", "asi.addStateListener", "asi.removeStateListener",
+        "asi.isScanning", "asi.startScanning", "asi.stopScanning", "asi.Port:getName", "asi.Port:getIdentifier",
+        "asi.Port:getState", "asi.Port:setBaudRate", "asi.Port:connect", "asi.Port:disconnect",
+        "asi.Port:setWriteListener", "asi.Port:write", "asi.Port:setReadListener", "asi.Port:setReadTimeout",
+        "asi.Port:read", "asi.Port:getValue", "gc:clipRect", "gc:drawArc", "gc:drawImage", "gc:drawLine",
+        "gc:drawPolyLine", "gc:drawRect", "gc:drawString", "gc:fillArc", "gc:fillPolygon", "gc:fillRect",
+        "gc:getStringHeight", "gc:getStringWidth", "gc:setColorRGB", "gc:setFont", "gc:setPen"
+    }
+    local matches = {}
+    for _, kw in ipairs(keywords) do
+        if string.sub(kw, 1, string.len(prefix)) == prefix then
+            local kwSegment = string.sub(kw, string.len(prefix) + 1)
+            if lastSegment == "" or (string.sub(kwSegment, 1, string.len(lastSegment)) == lastSegment and kwSegment ~= lastSegment) then
+                table.insert(matches, kw)
+            end
+        end
+    end
+    if #matches > 0 then
+        Menu.show("Autocomplete:", matches, function(idx, selected)
+            if not selected then return end
+                local doc = current()
+                local currentText = doc.lines[doc.row] or ""
+                local left = string.sub(currentText, 1, doc.col - string.len(lastSegment))
+                local right = string.sub(currentText, doc.col + 1)
+                doc.lines[doc.row] = left .. string.sub(selected, string.len(prefix) + 1) .. right
+                doc.col = string.len(left .. string.sub(selected, string.len(prefix) + 1))
+                autocompleteHint = ""
+                platform.window:invalidate()
+        end)
+        return true
+    end
+end
+
 
 timer.start(0.4)
 loadCustomThemes()
