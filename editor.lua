@@ -1148,23 +1148,35 @@ function on.paint(gc)
 
                         gc:drawString(char, DRAWROW, yPos, "top")
 
+                        if physicalRow == current().row and (globalCharIdx - 1) == current().col and autocompleteHint ~= "" and not isTextSelected then
+                            local oldR, oldG, oldB = c("codeH",1), c("codeH",2), c("codeH",3)
+                            if editor.currentTheme == 2 then gc:setColorRGB(90, 90, 90) else gc:setColorRGB(160, 160, 160) end
+
+                            gc:drawString(autocompleteHint, DRAWROW, yPos, "top")
+
+                            gc:setColorRGB(oldR, oldG, oldB)
+                        end
+
                         if physicalRow == current().row and (globalCharIdx - 1) == current().col and editor.cursorVisible and not isTextSelected then
                             gc:setColorRGB(c("codeH",1), c("codeH",2), c("codeH",3))
                             gc:fillRect(DRAWROW, yPos + 1, 1, LINE_HEIGHT - 1)
                         end
 
-                        if physicalRow == current().row and (globalCharIdx - 1) == current().col and autocompleteHint ~= "" and not isTextSelected then
+                        DRAWROW = DRAWROW + gc:getStringWidth(char)
+                    end
+
+                    if physicalRow == current().row and (current().col == string.len(currentLineText)) and (subLineInfo.startChar + textLen > string.len(currentLineText)) and not isTextSelected then
+                        if autocompleteHint ~= "" then
                             if editor.currentTheme == 2 then gc:setColorRGB(90, 90, 90) else gc:setColorRGB(160, 160, 160) end
                             gc:drawString(autocompleteHint, DRAWROW, yPos, "top")
                         end
 
-                        DRAWROW = DRAWROW + gc:getStringWidth(char)
+                        if editor.cursorVisible then
+                            gc:setColorRGB(c("codeH",1), c("codeH",2), c("codeH",3))
+                            gc:fillRect(DRAWROW, yPos + 1, 1, LINE_HEIGHT - 1)
+                        end
                     end
 
-                    if physicalRow == current().row and (current().col == string.len(currentLineText)) and (subLineInfo.startChar + textLen > string.len(currentLineText)) and editor.cursorVisible and not isTextSelected then
-                        gc:setColorRGB(c("codeH",1), c("codeH",2), c("codeH",3))
-                        gc:fillRect(DRAWROW, yPos + 1, 1, LINE_HEIGHT - 1)
-                    end
 
                     visualLineIndex = visualLineIndex + 1
                 end
@@ -1198,8 +1210,10 @@ function on.tabKey()
     local left = string.sub(currentText, 1, doc.col)
     local right = string.sub(currentText, doc.col + 1)
     if autocompleteHint ~= "" then
-        doc.lines[doc.row] = left .. autocompleteHint .. right
-        doc.col = doc.col + string.len(autocompleteHint)
+        local actualHint = autocompleteHint:match("^([^(]+)") or autocompleteHint
+        actualHint = actualHint:gsub("%s+$", "")
+        doc.lines[doc.row] = left .. actualHint .. right
+        doc.col = doc.col + string.len(actualHint)
         autocompleteHint = ""
         platform.window:invalidate()
         return
@@ -1209,6 +1223,7 @@ function on.tabKey()
     doc.col = doc.col + indentSetting
     platform.window:invalidate()
 end
+
 
 
 function on.charIn(char)
