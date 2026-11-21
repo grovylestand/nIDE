@@ -199,32 +199,78 @@ local function drawSquiggly(gc, x, y, width)
 end
 
 local function getVcsKey(docName)
-    local clean = string.gsub(docName or "untitled", "[^%w_]", "")
-    return "nvcs_" .. string.sub(clean, 1, 10)
+    local registry = var.recall("nvcs_registry")
+    if type(registry) ~= "table" then registry = {} end
+    local target = docName or "untitled"
+    for i = 1, #registry do
+        if registry[i] == target then
+            return "nvcs_" .. i
+        end
+    end
+    table.insert(registry, target)
+    var.store("nvcs_registry", registry)
+    return "nvcs_" .. #registry
 end
 
 local function loadVersions(doc)
     doc = doc or current()
     if not doc.versions then
         local saved = var.recall(getVcsKey(doc.name))
-        doc.versions = type(saved) == "table" and saved or {}
+        doc.versions = {}
+        if type(saved) == "table" then
+            for i = 1, #saved do
+                local v = saved[i]
+                if type(v) == "table" then
+                    local rawLines = v[2] or v.lines
+                    local linesCopy = {}
+                    if type(rawLines) == "table" then
+                        for j = 1, #rawLines do
+                            linesCopy[j] = tostring(rawLines[j])
+                        end
+                    elseif type(rawLines) == "string" then
+                        for line in string.gmatch(rawLines .. "\n", "([^\n]*)\n") do
+                            table.insert(linesCopy, line)
+                        end
+                        if #linesCopy > 1 and linesCopy[#linesCopy] == "" then
+                            table.remove(linesCopy)
+                        end
+                    end
+                    if #linesCopy == 0 then linesCopy = { "" } end
+                    table.insert(doc.versions, {
+                        name = tostring(v[1] or v.name or v.msg or ("Rev " .. i)),
+                        lines = linesCopy,
+                        row = tonumber(v[3] or v.row) or 1,
+                        col = tonumber(v[4] or v.col) or 0
+                    })
+                end
+            end
+        end
     end
     return doc.versions
 end
-
 local function saveVersions(doc)
     doc = doc or current()
-    if doc.versions then
-        var.store(getVcsKey(doc.name), doc.versions)
+    if not doc.versions then return end
+    local key = getVcsKey(doc.name)
+    local payload = {}
+    for i = 1, #doc.versions do
+        local v = doc.versions[i]
+        payload[i] = {
+            v.name,
+            table.concat(v.lines, "\n"),
+            v.row,
+            v.col
+        }
     end
+    var.store(key, payload)
 end
 
-local function commitVersion(message)
+local function commitVersion(commitName)
     local doc = current()
     local versions = loadVersions(doc)
-    local label = (message and message ~= "") and message or ("Rev " .. (#versions + 1))
+    local label = (commitName and commitName ~= "") and commitName or ("Rev " .. (#versions + 1))
     table.insert(versions, {
-        msg = label,
+        name = label,
         lines = cloneLines(doc.lines),
         row = doc.row,
         col = doc.col
