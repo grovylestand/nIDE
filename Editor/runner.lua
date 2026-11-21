@@ -5,7 +5,7 @@ _G.print = function(...)
         table.insert(str_pieces, tostring(args[i]))
     end
     local message = table.concat(str_pieces, "    ")
-    
+
     local current_logs = var.recall("nidetermlog") or ""
     if current_logs ~= "" then
         current_logs = current_logs .. "\n" .. message
@@ -58,16 +58,16 @@ _G.iderequire = function(filename)
     end
 
     _G[filename] = nil
-    
+
     _G.ide_packages[filename] = result
     return result
 end
 
 menu = {
     {"Script",
-    {"Restart Script", function() 
-        _G.ide_packages = {} 
-        clearScreenRequested = true 
+    {"Restart Script", function()
+        _G.ide_packages = {}
+        clearScreenRequested = true
     end}}
 }
 
@@ -96,7 +96,7 @@ function on.timer()
       code1 = code2
       loadcode(code1)
       platform.window:invalidate()
-   end 
+   end
 end
 timer.start(1)
 
@@ -106,7 +106,7 @@ function on.paint(gc)
         local w = platform.window:width()
         local h = platform.window:height()
         code1=""
-        platform.window:invalidate() 
+        platform.window:invalidate()
         clearScreenRequested=false
     end
 end
