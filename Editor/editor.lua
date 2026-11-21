@@ -982,7 +982,8 @@ menu = {
             local options = {}
             local indexMap = {}
             for i = #versions, 1, -1 do
-                table.insert(options, "#" .. i .. ": " .. versions[i].msg .. " (" .. #versions[i].lines .. "L)")
+                table.insert(options,
+                    "#" .. i .. ": " .. (versions[i].name or ("v" .. i)) .. " (" .. #versions[i].lines .. "L)")
                 table.insert(indexMap, i)
             end
             Menu.show("Restore Snapshot:", options, function(optIdx)
@@ -998,6 +999,7 @@ menu = {
             platform.window:invalidate()
         end }
     },
+
     { "Build",
         { "To TNS",
             function()
