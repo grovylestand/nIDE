@@ -22,68 +22,297 @@ local autocompleteFullWord = ""
 local autocompleteMatchLen = 0
 local indentSetting = 4
 local softWrapEnabled = true
-
+local luna = nrequire("luna")
+local MAX_HISTORY = 100
 consoleBuffer = {}
 maxLines = 10
-local themes = {
-    {
-        name = "Light Mode",
-        bg = {246, 248, 250},
-        activeTab = {255, 255, 255},
-        activeTabText = {36, 41, 47},
-        inactiveTab = {243, 244, 246},
-        inactiveTabText = {87, 96, 106},
-        newTabBackground = {234, 238, 242},
-        newTabBorders = {209, 213, 219},
-        scrollTrack = {246, 248, 250},
-        scrollThumb = {213, 216, 219},
-        selectColor = {218, 233, 254},
-        closeTab = {207, 34, 46},
-        promptBg = {255, 255, 255},
-        activeRow = {234, 242, 255},
-        menuScrollTrack = {243, 244, 246},
-        menuScrollThumb = {209, 213, 219},
-        keywordsH = {215, 58, 73},
-        boolnilH = {0, 92, 197},
-        stdlibH = {111, 66, 193},
-        codeH = {36, 41, 47}
-    },
-    {
-        name = "Dark Moded",
-        bg = {30, 30, 30},
-        activeTab = {37, 37, 38},
-        activeTabText = {255, 255, 255},
-        inactiveTab = {45, 45, 45},
-        inactiveTabText = {150, 150, 150},
-        newTabBackground = {51, 51, 51},
-        newTabBorders = {67, 67, 67},
-        scrollTrack = {30, 30, 30},
-        scrollThumb = {66, 66, 66},
-        selectColor = {38, 79, 120},
-        closeTab = {241, 76, 76},
-        promptBg = {37, 37, 38},
-        activeRow = {45, 45, 48},
-        menuScrollTrack = {45, 45, 45},
-        menuScrollThumb = {61, 61, 61},
-        keywordsH = {86, 156, 214},
-        boolnilH = {220, 162, 111},
-        stdlibH = {78, 201, 176},
-        codeH = {212, 212, 212}
-    }
-}
+local MAX_VERSIONS = 15
+local cachedSyntaxErr = { editCount = -1, tabIdx = -1, line = nil, msg = nil }
 
 local editor = {
     tabs = {
-        { name = "Untitled1", lines = {""}, row = 1, col = 0, scrollRow = 1 },
-        { name = "Untitled2", lines = {""}, row = 1, col = 0, scrollRow = 1 }
+        { name = "Untitled1", lines = { "" }, row = 1, col = 0, scrollRow = 1, undoStack = {}, redoStack = {}, foldedLines = {} },
+        { name = "Untitled2", lines = { "" }, row = 1, col = 0, scrollRow = 1, undoStack = {}, redoStack = {}, foldedLines = {} }
     },
     currentTheme = 2,
     activeTab = 1,
     tabCounter = 2,
     cursorVisible = true,
-    font = {family = "sansserif", style = "r", size = 9},
+    font = { family = "sansserif", style = "r", size = 9 },
     pendingClick = nil,
-    shouldWrap = false
+    shouldWrap = false,
+    editCounter = 0
+}
+
+local function getIndentLevel(line)
+    if not line or line:match("^%s*$") then return -1 end
+    local spaces = line:match("^(%s*)") or ""
+    return #spaces
+end
+
+local function getFoldEndLine(lines, startLine)
+    local baseIndent = getIndentLevel(lines[startLine])
+    if baseIndent < 0 then return nil end
+    local endLine = nil
+    for i = startLine + 1, #lines do
+        local ind = getIndentLevel(lines[i])
+        if ind >= 0 then
+            if ind > baseIndent then
+                endLine = i
+            else
+                break
+            end
+        end
+    end
+    return endLine
+end
+
+local function checkSyntaxError(doc)
+    if cachedSyntaxErr.editCount == editor.editCounter and cachedSyntaxErr.tabIdx == editor.activeTab then
+        return cachedSyntaxErr.line, cachedSyntaxErr.msg
+    end
+    local codeStr = table.concat(doc.lines, "\n")
+    local chunk, err = loadstring(codeStr)
+    local errLine, errMsg = nil, nil
+    if not chunk and err then
+        local lineStr, msg = tostring(err):match(":(%d+):%s*(.+)")
+        errLine = tonumber(lineStr) or #doc.lines
+        errMsg = msg or tostring(err)
+    end
+    cachedSyntaxErr = {
+        editCount = editor.editCounter,
+        tabIdx = editor.activeTab,
+        line = errLine,
+        msg = errMsg
+    }
+    return errLine, errMsg
+end
+
+local function cloneLines(lines)
+    local copy = {}
+    for i = 1, #lines do
+        copy[i] = lines[i]
+    end
+    return copy
+end
+
+local function clampCursor(doc)
+    doc = doc or current()
+    if not doc.lines or #doc.lines == 0 then
+        doc.lines = { "" }
+    end
+    doc.row = math.max(1, math.min(doc.row or 1, #doc.lines))
+    local maxCol = string.len(doc.lines[doc.row] or "")
+    doc.col = math.max(0, math.min(doc.col or 0, maxCol))
+end
+
+
+local function isLineHidden(doc, row)
+    if not doc.foldedLines then return false end
+    for startRow, _ in pairs(doc.foldedLines) do
+        if row > startRow then
+            local endRow = getFoldEndLine(doc.lines, startRow)
+            if endRow and row <= endRow then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local function pushUndo(doc)
+    doc = doc or current()
+    doc.undoStack = doc.undoStack or {}
+    doc.redoStack = {}
+    table.insert(doc.undoStack, {
+        lines = cloneLines(doc.lines),
+        row = doc.row,
+        col = doc.col
+    })
+    if #doc.undoStack > MAX_HISTORY then
+        table.remove(doc.undoStack, 1)
+    end
+    editor.editCounter = editor.editCounter + 1
+end
+
+local function ensureRowVisible(doc, row)
+    if not doc.foldedLines then return end
+    for startRow, _ in pairs(doc.foldedLines) do
+        if row > startRow then
+            local endRow = getFoldEndLine(doc.lines, startRow)
+            if endRow and row <= endRow then
+                doc.foldedLines[startRow] = nil
+            end
+        end
+    end
+end
+
+local function scrollIntoView()
+    local doc = current()
+    ensureRowVisible(doc, doc.row)
+
+    local visibleRowsAbove = 0
+    if doc.row >= doc.scrollRow then
+        for r = doc.scrollRow, doc.row do
+            if not isLineHidden(doc, r) then
+                visibleRowsAbove = visibleRowsAbove + 1
+            end
+        end
+    end
+
+    if doc.row < doc.scrollRow then
+        doc.scrollRow = doc.row
+        while doc.scrollRow > 1 and isLineHidden(doc, doc.scrollRow) do
+            doc.scrollRow = doc.scrollRow - 1
+        end
+    elseif visibleRowsAbove > VISIBLE_LINES then
+        local count = 0
+        local r = doc.row
+        while r >= 1 do
+            if not isLineHidden(doc, r) then
+                count = count + 1
+                if count == VISIBLE_LINES then
+                    doc.scrollRow = r
+                    break
+                end
+            end
+            r = r - 1
+        end
+    end
+end
+
+
+local function drawSquiggly(gc, x, y, width)
+    if width <= 0 then return end
+    gc:setColorRGB(c("errorH", 1), c("errorH", 2), c("errorH", 3))
+    local step = 2
+    local curX = x
+    local up = true
+    while curX < x + width do
+        local nextX = math.min(curX + step, x + width)
+        local y1 = up and (y + 1) or y
+        local y2 = up and y or (y + 1)
+        gc:drawLine(curX, y1, nextX, y2)
+        curX = nextX
+        up = not up
+    end
+end
+
+local function getVcsKey(docName)
+    local clean = string.gsub(docName or "untitled", "[^%w_]", "")
+    return "nvcs_" .. string.sub(clean, 1, 10)
+end
+
+local function loadVersions(doc)
+    doc = doc or current()
+    if not doc.versions then
+        local saved = var.recall(getVcsKey(doc.name))
+        doc.versions = type(saved) == "table" and saved or {}
+    end
+    return doc.versions
+end
+
+local function saveVersions(doc)
+    doc = doc or current()
+    if doc.versions then
+        var.store(getVcsKey(doc.name), doc.versions)
+    end
+end
+
+local function commitVersion(message)
+    local doc = current()
+    local versions = loadVersions(doc)
+    local label = (message and message ~= "") and message or ("Rev " .. (#versions + 1))
+    table.insert(versions, {
+        msg = label,
+        lines = cloneLines(doc.lines),
+        row = doc.row,
+        col = doc.col
+    })
+    if #versions > MAX_VERSIONS then
+        table.remove(versions, 1)
+    end
+    saveVersions(doc)
+end
+
+local function restoreVersion(idx)
+    local doc = current()
+    local versions = loadVersions(doc)
+    local ver = versions[idx]
+    if not ver then return end
+    pushUndo(doc)
+    doc.lines = cloneLines(ver.lines)
+    doc.row = math.min(ver.row or 1, #doc.lines)
+    doc.col = math.min(ver.col or 0, string.len(doc.lines[doc.row] or ""))
+    isTextSelected = false
+    autocompleteHint = ""
+    scrollIntoView()
+    platform.window:invalidate()
+end
+
+local themes = {
+    {
+        name = "Light Mode",
+        bg = { 246, 248, 250 },
+        activeTab = { 255, 255, 255 },
+        activeTabText = { 36, 41, 47 },
+        inactiveTab = { 243, 244, 246 },
+        inactiveTabText = { 87, 96, 106 },
+        newTabBackground = { 234, 238, 242 },
+        newTabBorders = { 209, 213, 219 },
+        scrollTrack = { 246, 248, 250 },
+        scrollThumb = { 213, 216, 219 },
+        selectColor = { 218, 233, 254 },
+        closeTab = { 207, 34, 46 },
+        promptBg = { 255, 255, 255 },
+        activeRow = { 234, 242, 255 },
+        menuScrollTrack = { 243, 244, 246 },
+        menuScrollThumb = { 209, 213, 219 },
+        keywordsH = { 215, 58, 73 },
+        boolnilH = { 0, 92, 197 },
+        stdlibH = { 111, 66, 193 },
+        codeH = { 36, 41, 47 },
+        stringH = { 22, 122, 72 },
+        numberH = { 180, 80, 20 },
+        commentH = { 120, 128, 134 },
+        opH = { 90, 96, 106 },
+        errorH = { 220, 50, 50 },
+        lineNumH = { 150, 155, 160 },
+        hintH = { 160, 166, 172 },
+        bracketMatchH = { 255, 235, 150 },
+        foldH = { 120, 128, 134 }
+    },
+    {
+        name = "Dark Moded",
+        bg = { 30, 30, 30 },
+        activeTab = { 37, 37, 38 },
+        activeTabText = { 255, 255, 255 },
+        inactiveTab = { 45, 45, 45 },
+        inactiveTabText = { 150, 150, 150 },
+        newTabBackground = { 51, 51, 51 },
+        newTabBorders = { 67, 67, 67 },
+        scrollTrack = { 30, 30, 30 },
+        scrollThumb = { 66, 66, 66 },
+        selectColor = { 38, 79, 120 },
+        closeTab = { 241, 76, 76 },
+        promptBg = { 37, 37, 38 },
+        activeRow = { 45, 45, 48 },
+        menuScrollTrack = { 45, 45, 45 },
+        menuScrollThumb = { 61, 61, 61 },
+        keywordsH = { 86, 156, 214 },
+        boolnilH = { 220, 162, 111 },
+        stdlibH = { 78, 201, 176 },
+        codeH = { 212, 212, 212 },
+        stringH = { 152, 195, 121 },
+        numberH = { 209, 154, 102 },
+        commentH = { 110, 115, 120 },
+        opH = { 180, 186, 192 },
+        errorH = { 244, 90, 90 },
+        lineNumH = { 100, 104, 108 },
+        hintH = { 90, 94, 98 },
+        bracketMatchH = { 96, 84, 40 },
+        foldH = { 140, 146, 150 }
+    }
 }
 
 plugins = {
@@ -215,7 +444,7 @@ function plugins.rebuildMenu()
         for _, act in ipairs(plugins.actions) do
             local label = type(act) == "table" and (act.label or act[1]) or "Unnamed Action"
             local fn = type(act) == "table" and (act.fn or act[2]) or function() end
-            table.insert(pluginToolbox, {label, fn})
+            table.insert(pluginToolbox, { label, fn })
         end
     end
 
@@ -275,43 +504,78 @@ function plugins.triggerHook(hookName, ...)
     end
 end
 
-function createPluginTemplate()
-    editor.tabCounter = editor.tabCounter + 1
-    local template = [[return {
-    name = "MyExtension",
-    author = "User",
-    version = "1.0",
-    onInit = function(ed)
-    end,
-    onBeforeSave = function(tab)
-    end,
-    onRender = function(gc)
-    end,
-    menuItems = {
-        {"Plugin Action", function()
-            Prompt.show("Plugin Action Executed!", "", function() end)
-        end}
-    }
-}]]
-
-    local lines = {}
-    for line in template:gmatch("([^\n]+)") do
-        table.insert(lines, line)
-    end
-
-    table.insert(editor.tabs, {
-        name = "plug_custom.lua",
-        lines = lines,
-        row = 1,
-        col = 1,
-        scrollRow = 1
+local function undo()
+    local doc = current()
+    if not doc.undoStack or #doc.undoStack == 0 then return end
+    doc.redoStack = doc.redoStack or {}
+    table.insert(doc.redoStack, {
+        lines = cloneLines(doc.lines),
+        row = doc.row,
+        col = doc.col
     })
-    editor.activeTab = #editor.tabs
+    local state = table.remove(doc.undoStack)
+    doc.lines = state.lines
+    doc.row = state.row
+    doc.col = state.col
+    isTextSelected = false
+    autocompleteHint = ""
+    editor.editCounter = editor.editCounter + 1
+    scrollIntoView()
     platform.window:invalidate()
 end
 
-function c(themeColor,num)
-  return themes[editor.currentTheme][themeColor][num]
+local function redo()
+    local doc = current()
+    if not doc.redoStack or #doc.redoStack == 0 then return end
+    doc.undoStack = doc.undoStack or {}
+    table.insert(doc.undoStack, {
+        lines = cloneLines(doc.lines),
+        row = doc.row,
+        col = doc.col
+    })
+    local state = table.remove(doc.redoStack)
+    doc.lines = state.lines
+    doc.row = state.row
+    doc.col = state.col
+    isTextSelected = false
+    autocompleteHint = ""
+    editor.editCounter = editor.editCounter + 1
+    scrollIntoView()
+    platform.window:invalidate()
+end
+
+
+local THEME_DEFAULTS = {
+    bg = { 30, 30, 30 },
+    codeH = { 212, 212, 212 },
+    stringH = { 152, 195, 121 },
+    numberH = { 209, 154, 102 },
+    commentH = { 110, 115, 120 },
+    opH = { 180, 186, 192 },
+    errorH = { 244, 90, 90 },
+    lineNumH = { 100, 104, 108 },
+    hintH = { 90, 94, 98 },
+    bracketMatchH = { 96, 84, 40 },
+    foldH = { 140, 146, 150 }
+}
+
+function normalizeThemes()
+    for _, t in ipairs(themes) do
+        for k, v in pairs(THEME_DEFAULTS) do
+            if type(t[k]) ~= "table" or not t[k][1] then
+                t[k] = { v[1], v[2], v[3] }
+            end
+        end
+    end
+end
+
+function c(themeColor, num)
+    local t = themes[editor.currentTheme]
+    local col = t and t[themeColor]
+    if type(col) == "table" and col[num] then return col[num] end
+    local d = THEME_DEFAULTS[themeColor]
+    if d then return d[num] end
+    return 128
 end
 
 function current()
@@ -373,7 +637,10 @@ function saveCustomThemes()
             local themeStr = "name:" .. sourceTheme.name
             for k, v in pairs(sourceTheme) do
                 if k ~= "name" and type(v) == "table" and v[1] and v[2] and v[3] then
-                    themeStr = themeStr .. ";" .. k .. ":" .. string.format("%d,%d,%d", tonumber(v[1]) or 0, tonumber(v[2]) or 0, tonumber(v[3]) or 0)
+                    themeStr = themeStr ..
+                        ";" ..
+                        k ..
+                        ":" .. string.format("%d,%d,%d", tonumber(v[1]) or 0, tonumber(v[2]) or 0, tonumber(v[3]) or 0)
                 end
             end
             if serializedData == "" then
@@ -405,7 +672,7 @@ function loadCustomThemes()
                         else
                             local r, g, b = val:match("(%d+),(%d+),(%d+)")
                             if r and g and b then
-                                restoredTheme[key] = {tonumber(r), tonumber(g), tonumber(b)}
+                                restoredTheme[key] = { tonumber(r), tonumber(g), tonumber(b) }
                             end
                         end
                     end
@@ -471,16 +738,6 @@ local function isCharSelected(lineIdx, colIdx)
     return false
 end
 
-local function scrollIntoView()
-    local doc = current()
-    if current().row < current().scrollRow then
-        current().scrollRow = current().row
-    end
-    if current().row >= current().scrollRow + VISIBLE_LINES then
-        current().scrollRow = current().row - VISIBLE_LINES + 1
-    end
-end
-
 local function handleSelectionKeys(direction)
     if not isTextSelected then return false end
     local doc = current()
@@ -530,10 +787,14 @@ Prompt = {
         platform.window:invalidate()
     end,
     charIn = function(char)
-        if Prompt.active then Prompt.text = Prompt.text .. char; platform.window:invalidate(); return true end
+        if Prompt.active then
+            Prompt.text = Prompt.text .. char; platform.window:invalidate(); return true
+        end
     end,
     backspace = function()
-        if Prompt.active then Prompt.text = string.sub(Prompt.text, 1, -2); platform.window:invalidate(); return true end
+        if Prompt.active then
+            Prompt.text = string.sub(Prompt.text, 1, -2); platform.window:invalidate(); return true
+        end
     end,
     enter = function()
         if Prompt.active then
@@ -545,9 +806,9 @@ Prompt = {
     end,
     paint = function(gc)
         if not Prompt.active then return end
-        gc:setColorRGB(c("promptBg",1), c("promptBg",2), c("promptBg",3))
+        gc:setColorRGB(c("promptBg", 1), c("promptBg", 2), c("promptBg", 3))
         gc:fillRect(10, 10, 300, 50)
-        gc:setColorRGB(c("codeH",1),c("codeH",2),c("codeH",3))
+        gc:setColorRGB(c("codeH", 1), c("codeH", 2), c("codeH", 3))
         gc:drawRect(10, 10, 300, 50)
         gc:drawString(Prompt.label .. Prompt.text, 20, 25, "top")
     end
@@ -609,9 +870,9 @@ Menu = {
         local visibleCount = math.min(#Menu.options, Menu.maxVisible)
         local menuHeight = 40 + (visibleCount * 20)
 
-        gc:setColorRGB(c("promptBg",1),c("promptBg",2),c("promptBg",3))
+        gc:setColorRGB(c("promptBg", 1), c("promptBg", 2), c("promptBg", 3))
         gc:fillRect(20, y, 280, menuHeight)
-        gc:setColorRGB(c("codeH",1),c("codeH",2),c("codeH",3))
+        gc:setColorRGB(c("codeH", 1), c("codeH", 2), c("codeH", 3))
         gc:drawRect(20, y, 280, menuHeight)
 
         gc:setFont("sansserif", "b", 12)
@@ -624,9 +885,9 @@ Menu = {
             if opt then
                 local itemY = y + 35 + (i * 20)
                 if itemIdx == Menu.index then
-                    gc:setColorRGB(c("activeRow",1),c("activeRow",2),c("activeRow",3))
+                    gc:setColorRGB(c("activeRow", 1), c("activeRow", 2), c("activeRow", 3))
                     gc:fillRect(25, itemY, 255, 18)
-                    gc:setColorRGB(c("codeH",1),c("codeH",2),c("codeH",3))
+                    gc:setColorRGB(c("codeH", 1), c("codeH", 2), c("codeH", 3))
                     gc:drawString("> " .. opt, 30, itemY, "top")
                 else
                     gc:drawString("  " .. opt, 30, itemY, "top")
@@ -639,7 +900,7 @@ Menu = {
             local sbY = y + 35
             local sbHeight = visibleCount * 20
 
-            gc:setColorRGB(c("menuScrollTrack",1),c("menuScrollTrack",2),c("menuScrollTrack",3))
+            gc:setColorRGB(c("menuScrollTrack", 1), c("menuScrollTrack", 2), c("menuScrollTrack", 3))
             gc:fillRect(sbX, sbY, 6, sbHeight)
 
             local thumbHeight = math.max(10, math.floor((Menu.maxVisible / #Menu.options) * sbHeight))
@@ -647,7 +908,7 @@ Menu = {
             local scrollPct = (Menu.scrollRow - 1) / maxScrollDist
             local thumbY = sbY + math.floor(scrollPct * (sbHeight - thumbHeight))
 
-            gc:setColorRGB(c("menuScrollThumb",1),c("menuScrollThumb",2),c("menuScrollThumb",3))
+            gc:setColorRGB(c("menuScrollThumb", 1), c("menuScrollThumb", 2), c("menuScrollThumb", 3))
             gc:fillRect(sbX, thumbY, 6, thumbHeight)
         end
     end
@@ -655,10 +916,124 @@ Menu = {
 
 toolpalette.enableCopy(true)
 toolpalette.enablePaste(true)
-
 menu = {
-    {"Plugins",
-        {"Plugins", function()
+    { "Version",
+        { "Commit Snapshot", function()
+            local doc = current()
+            local versions = loadVersions(doc)
+            Prompt.show("Commit message: ", "v" .. (#versions + 1), function(msg)
+                commitVersion(msg)
+                platform.window:invalidate()
+            end)
+        end },
+        { "History / Restore", function()
+            local doc = current()
+            local versions = loadVersions(doc)
+            if #versions == 0 then
+                Menu.show("Version History:", { "No snapshots saved" }, function() end)
+                return
+            end
+            local options = {}
+            local indexMap = {}
+            for i = #versions, 1, -1 do
+                table.insert(options, "#" .. i .. ": " .. versions[i].msg .. " (" .. #versions[i].lines .. "L)")
+                table.insert(indexMap, i)
+            end
+            Menu.show("Restore Snapshot:", options, function(optIdx)
+                if optIdx and indexMap[optIdx] then
+                    restoreVersion(indexMap[optIdx])
+                end
+            end)
+        end },
+        { "Clear History", function()
+            local doc = current()
+            doc.versions = {}
+            saveVersions(doc)
+            platform.window:invalidate()
+        end }
+    },
+    { "Build",
+        { "To TNS",
+            function()
+                local visited = {}
+                local bundledModules = {}
+
+                local function getModuleSource(modName)
+                    for _, tab in ipairs(editor.tabs) do
+                        if tab.name == modName then
+                            return table.concat(tab.lines, "\n")
+                        end
+                    end
+                    local saved = var.recall("nide_" .. modName) or var.recall(modName)
+                    if type(saved) == "table" then
+                        return table.concat(saved, "\n")
+                    elseif type(saved) == "string" then
+                        return saved
+                    end
+                    return nil
+                end
+
+                local function collectDependencies(sourceCode)
+                    for modName in string.gmatch(sourceCode, 'iderequire%s*%(?%s*["\']([^"\']+)["\']%s*%)?') do
+                        if not visited[modName] then
+                            visited[modName] = true
+                            local modSrc = getModuleSource(modName)
+                            if modSrc then
+                                collectDependencies(modSrc)
+                                table.insert(bundledModules, { name = modName, code = modSrc })
+                            end
+                        end
+                    end
+                end
+
+                local mainScript = table.concat(current().lines, "\n")
+                collectDependencies(mainScript)
+
+                local header = {
+                    "_G.ide_packages = _G.ide_packages or {}",
+                    "local _bundled_sources = {"
+                }
+
+                for _, mod in ipairs(bundledModules) do
+                    table.insert(header, string.format("    [%q] = %q,", mod.name, mod.code))
+                end
+
+                table.insert(header, "}")
+                table.insert(header, [[
+_G.iderequire = function(filename)
+    if _G.ide_packages[filename] then
+        return _G.ide_packages[filename]
+    end
+    local codeStr = _bundled_sources[filename]
+    if not codeStr or codeStr == "" then
+        error("iderequire: bundled module '" .. tostring(filename) .. "' not found.")
+    end
+    local chunk, err = loadstring(codeStr)
+    if not chunk then
+        error("iderequire: syntax error in '" .. tostring(filename) .. "': " .. tostring(err))
+    end
+    local env = setmetatable({}, { __index = _G })
+    setfenv(chunk, env)
+    local status, result = pcall(chunk)
+    if not status then
+        error("iderequire: runtime error in '" .. tostring(filename) .. "': " .. tostring(result))
+    end
+    if result == nil or type(result) ~= "table" then
+        result = env
+    end
+    _G[filename] = nil
+    _G.ide_packages[filename] = result
+    return result
+end
+]])
+
+                local finalScript = table.concat(header, "\n") .. "\n" .. mainScript
+                local name = current().name .. "_build.tns"
+                make_tns(finalScript, name, "script.lua")
+            end
+        } },
+    { "Plugins",
+        { "Plugins", function()
             local options = {}
             for _, p in ipairs(plugins.list) do
                 table.insert(options, (p.enabled and "[ON] " or "[OFF] ") .. p.name)
@@ -671,8 +1046,8 @@ menu = {
                 savePlugins()
                 toolpalette.register(menu)
             end)
-        end},
-        {"Compile Tab to Plugin", function()
+        end },
+        { "Compile Tab to Plugin", function()
             local codeStr = table.concat(current().lines, "\n")
             local ok, err = plugins.registerFromCode(current().name, codeStr, true, true)
             if not ok then
@@ -680,20 +1055,17 @@ menu = {
             else
                 Prompt.show("Success", "Plugin successful!", function() end)
             end
-        end},
-        {"New Plugin", function()
-            createPluginTemplate()
-        end}
+        end },
     },
-    {"View",
-        {"Toggle Theme", function()
+    { "View",
+        { "Toggle Theme", function()
             editor.currentTheme = (editor.currentTheme % #themes) + 1
             if themes[editor.currentTheme] and themes[editor.currentTheme].name then
                 var.store("nide_active_theme", themes[editor.currentTheme].name)
             end
             platform.window:invalidate()
-        end},
-        {"Themes Management", function()
+        end },
+        { "Themes Management", function()
             local themeOptions = {}
             for i = 1, #themes do
                 local prefix = (i == editor.currentTheme) and "[X] " or "[ ] "
@@ -721,7 +1093,7 @@ menu = {
                             local newTheme = {}
                             for k, v in pairs(selectedBase) do
                                 if type(v) == "table" then
-                                    newTheme[k] = {v[1], v[2], v[3]}
+                                    newTheme[k] = { v[1], v[2], v[3] }
                                 end
                             end
                             newTheme.name = newName
@@ -734,7 +1106,7 @@ menu = {
                     end)
                 else
                     local targetThemeIdx = tIndex
-                    local actions = {"Activate Theme", "Rename Theme", "Edit Colors"}
+                    local actions = { "Activate Theme", "Rename Theme", "Edit Colors" }
                     Menu.show("Theme Actions (" .. themes[targetThemeIdx].name .. "):", actions, function(aIndex)
                         if not aIndex then return end
 
@@ -742,7 +1114,6 @@ menu = {
                             editor.currentTheme = targetThemeIdx
                             var.store("nide_active_theme", themes[targetThemeIdx].name)
                             platform.window:invalidate()
-
                         elseif aIndex == 2 then
                             Prompt.show("Enter new theme name:", themes[targetThemeIdx].name, function(newName)
                                 if newName and newName ~= "" then
@@ -773,14 +1144,15 @@ menu = {
 
                                 local key = keys[pIndex]
                                 local curThemeObj = themes[targetThemeIdx]
-                                local currentRGB = curThemeObj[key] and table.concat(curThemeObj[key], ",") or "255,255,255"
+                                local currentRGB = curThemeObj[key] and table.concat(curThemeObj[key], ",") or
+                                    "255,255,255"
 
                                 Prompt.show("Enter RGB for " .. key .. " (R,G,B):", currentRGB, function(input)
                                     if not input or input == "" then return end
 
                                     local r, g, b = input:match("(%d+),%s*(%d+),%s*(%d+)")
                                     if r and g and b then
-                                        themes[targetThemeIdx][key] = {tonumber(r), tonumber(g), tonumber(b)}
+                                        themes[targetThemeIdx][key] = { tonumber(r), tonumber(g), tonumber(b) }
                                         saveCustomThemes()
                                         platform.window:invalidate()
                                     end
@@ -790,10 +1162,24 @@ menu = {
                     end)
                 end
             end)
-        end}
+        end }
     },
-    {"Code",
-        {"Go to Line", function()
+    { "Code",
+        { "Toggle Fold", function()
+            local doc = current()
+            doc.foldedLines = doc.foldedLines or {}
+            if getFoldEndLine(doc.lines, doc.row) then
+                doc.foldedLines[doc.row] = not doc.foldedLines[doc.row] or nil
+                platform.window:invalidate()
+            end
+        end },
+        { "Unfold All", function()
+            current().foldedLines = {}
+            platform.window:invalidate()
+        end },
+        { "Undo", function() undo() end },
+        { "Redo", function() redo() end },
+        { "Go to Line", function()
             Prompt.show("Go to line: ", "", function(result)
                 local targetLine = tonumber(result)
                 if targetLine then
@@ -804,49 +1190,57 @@ menu = {
                     platform.window:invalidate()
                 end
             end)
-        end},
-        {"Find & Replace", function()
+        end },
+        { "Find & Replace", function()
             Prompt.show("Find:", "", function(findStr)
                 if not findStr or findStr == "" then return end
                 Prompt.show("Replace with:", "", function(replaceStr)
                     local doc = current()
+                    pushUndo(doc)
                     for i, line in ipairs(doc.lines) do
                         doc.lines[i] = string.gsub(line, findStr, replaceStr)
                     end
                     platform.window:invalidate()
                 end)
             end)
-        end},
+        end },
     },
-    {"Settings",
-        {"Toggle Wrap", function()
+
+    { "Settings",
+        { "Toggle Wrap", function()
             softWrapEnabled = not softWrapEnabled
             platform.window:invalidate()
-        end},
-        {"Indentation", function()
-            local options = {"2 Spaces", "4 Spaces","6 Spaces","8 Spaces"}
+        end },
+        { "Indentation", function()
+            local options = { "2 Spaces", "4 Spaces", "6 Spaces", "8 Spaces" }
             Menu.show("Select Tab Width:", options, function(idx)
-                if idx == 1 then indentSetting = 2
-                elseif idx == 2 then indentSetting = 4
-                elseif idx == 3 then indentSetting = 6
-                elseif idx == 4 then indentSetting = 8 end
+                if idx == 1 then
+                    indentSetting = 2
+                elseif idx == 2 then
+                    indentSetting = 4
+                elseif idx == 3 then
+                    indentSetting = 6
+                elseif idx == 4 then
+                    indentSetting = 8
+                end
             end)
-        end}
+        end }
     },
-    {"Tabs",
-        {"New Tab", function()
+    { "Tabs",
+        { "New Tab", function()
             editor.tabCounter = editor.tabCounter + 1
             table.insert(editor.tabs, {
-                name = "Untitled" .. editor.tabCounter .. ".lua",
-                lines = {""},
+                name = "Untitled" .. editor.tabCounter,
+                lines = { "" },
                 row = 1,
-                col = 17,
+                col = 0, -- Changed from 17 to 0
                 scrollRow = 1
             })
             editor.activeTab = #editor.tabs
+            editor.cursorVisible = true
             platform.window:invalidate()
-        end},
-        {"Close Tab", function()
+        end },
+        { "Close Tab", function()
             if #editor.tabs > 1 then
                 table.remove(editor.tabs, editor.activeTab)
                 if editor.activeTab > #editor.tabs then
@@ -856,35 +1250,35 @@ menu = {
                 end
                 platform.window:invalidate()
             end
-        end},
-        {"Rename Tab", function()
+        end },
+        { "Rename Tab", function()
             Prompt.show("Enter new tab name: ", current().name, function(result)
                 if result and result ~= "" then
                     current().name = result
                     platform.window:invalidate()
                 end
             end)
-        end}
+        end }
     },
-    {"Font",
-        {"Increase Size", function()
+    { "Font",
+        { "Increase Size", function()
             editor.font.size = editor.font.size + 1
             platform.window:invalidate()
-        end},
-        {"Decrease Size", function()
+        end },
+        { "Decrease Size", function()
             if editor.font.size > 1 then
                 editor.font.size = editor.font.size - 1
                 platform.window:invalidate()
             end
-        end}
+        end }
     },
-    {"File",
-        {"Save", function()
+    { "File",
+        { "Save", function()
             local varNames = var.recall("nidevarnames") or {}
             local activeDoc = current()
             plugins.triggerHook("onBeforeSave", activeDoc)
 
-            local varName ="nide_" .. activeDoc.name
+            local varName = "nide_" .. activeDoc.name
 
             if not has(varNames, varName) then
                 table.insert(varNames, varName)
@@ -893,9 +1287,9 @@ menu = {
 
             local safeStringData = activeDoc.lines
             var.store(varName, safeStringData)
-        end},
+        end },
 
-        {"Load", function()
+        { "Load", function()
             local varNames = var.recall("nidevarnames") or {}
             if #varNames == 0 then
                 platform.window:invalidate()
@@ -907,7 +1301,7 @@ menu = {
 
                     local alreadyOpenIdx = nil
                     for i, tab in ipairs(editor.tabs) do
-                        if tab.name == targetName or tab.name == targetName .. ".lua" then
+                        if tab.name == targetName then
                             alreadyOpenIdx = i
                             break
                         end
@@ -917,7 +1311,7 @@ menu = {
                         editor.activeTab = alreadyOpenIdx
                     else
                         local rawData = var.recall(selected) or ""
-                        local loadedLines = {""}
+                        local loadedLines = { "" }
 
                         if type(rawData) == "string" then
                             loadedLines = {}
@@ -932,7 +1326,7 @@ menu = {
                         end
 
                         table.insert(editor.tabs, {
-                            name = targetName .. ".lua",
+                            name = targetName,
                             lines = loadedLines,
                             row = 1,
                             col = 0,
@@ -943,11 +1337,126 @@ menu = {
                     platform.window:invalidate()
                 end
             end)
-        end},
+        end },
     }
 }
 
 toolpalette.register(menu)
+
+local function getLineStringStates(lines)
+    local states = {}
+    local inMultiString = false
+    for r = 1, #lines do
+        states[r] = {}
+        local line = lines[r]
+        local i = 1
+        local len = #line
+        local quoteChar = nil
+        while i <= len do
+            if inMultiString then
+                states[r][i] = true
+                if line:sub(i, i + 1) == "]]" then
+                    states[r][i + 1] = true
+                    inMultiString = false
+                    i = i + 2
+                else
+                    i = i + 1
+                end
+            elseif quoteChar then
+                states[r][i] = true
+                local ch = line:sub(i, i)
+                if ch == "\\" then
+                    if i + 1 <= len then
+                        states[r][i + 1] = true
+                    end
+                    i = i + 2
+                elseif ch == quoteChar then
+                    quoteChar = nil
+                    i = i + 1
+                else
+                    i = i + 1
+                end
+            else
+                if line:sub(i, i + 1) == "--" then
+                    break
+                elseif line:sub(i, i + 1) == "[[" then
+                    states[r][i] = true
+                    states[r][i + 1] = true
+                    inMultiString = true
+                    i = i + 2
+                else
+                    local ch = line:sub(i, i)
+                    if ch == '"' or ch == "'" then
+                        states[r][i] = true
+                        quoteChar = ch
+                    end
+                    i = i + 1
+                end
+            end
+        end
+    end
+    return states
+end
+
+local function findMatchingBracket(doc, stringStates)
+    local row, col = doc.row, doc.col
+    local line = doc.lines[row] or ""
+    local pairsMap = {
+        ["("] = { close = ")", dir = 1 },
+        ["["] = { close = "]", dir = 1 },
+        ["{"] = { close = "}", dir = 1 },
+        [")"] = { close = "(", dir = -1 },
+        ["]"] = { close = "[", dir = -1 },
+        ["}"] = { close = "{", dir = -1 }
+    }
+
+    local checkOffsets = { col + 1, col }
+    local targetIdx, targetChar, info = nil, nil, nil
+
+    for _, idx in ipairs(checkOffsets) do
+        if idx >= 1 and idx <= #line and not (stringStates[row] and stringStates[row][idx]) then
+            local ch = line:sub(idx, idx)
+            if pairsMap[ch] then
+                targetIdx = idx
+                targetChar = ch
+                info = pairsMap[ch]
+                break
+            end
+        end
+    end
+
+    if not targetIdx then return nil end
+
+    local depth = 0
+    local r = row
+    local cIdx = targetIdx
+
+    while r >= 1 and r <= #doc.lines do
+        local l = doc.lines[r]
+        local startC = (r == row) and cIdx or (info.dir == 1 and 1 or #l)
+        local endC = (info.dir == 1) and #l or 1
+
+        for i = startC, endC, info.dir do
+            if not (stringStates[r] and stringStates[r][i]) then
+                local ch = l:sub(i, i)
+                if ch == targetChar then
+                    depth = depth + 1
+                elseif ch == info.close then
+                    depth = depth - 1
+                    if depth == 0 then
+                        return {
+                            [row .. ":" .. targetIdx] = true,
+                            [r .. ":" .. i] = true
+                        }
+                    end
+                end
+            end
+        end
+        r = r + info.dir
+    end
+
+    return nil
+end
 
 function on.paint(gc)
     gc:setFont(editor.font.family, editor.font.style, editor.font.size)
@@ -961,27 +1470,48 @@ function on.paint(gc)
             if px >= availableWidth then
                 editor.tabCounter = editor.tabCounter + 1
                 table.insert(editor.tabs, {
-                    name = "Untitled" .. editor.tabCounter .. "",
-                    lines = {""},
+                    name = "Untitled" .. editor.tabCounter,
+                    lines = { "" },
                     row = 1,
-                    col = 17,
+                    col = 0,
                     scrollRow = 1
                 })
                 editor.activeTab = #editor.tabs
+                editor.cursorVisible = true
             else
-                local chosenTab = math.floor(px / tabWidth) + 1
-                if chosenTab >= 1 and chosenTab <= #editor.tabs then
-                    local tabX = (chosenTab - 1) * tabWidth
-                    if px >= (tabX + tabWidth - 16) and #editor.tabs > 1 then
-                        table.remove(editor.tabs, chosenTab)
-                        if editor.activeTab > #editor.tabs then
-                            editor.activeTab = #editor.tabs
-                        elseif editor.activeTab == chosenTab and editor.activeTab > 1 then
-                            editor.activeTab = editor.activeTab - 1
-                        end
-                    else
-                        editor.activeTab = chosenTab
+                local clickedVisualRow = math.floor((py - MARGIN_TOP) / LINE_HEIGHT)
+                local targetRow = current().scrollRow
+                local vRow = 0
+                while targetRow <= #current().lines do
+                    if not isLineHidden(current(), targetRow) then
+                        if vRow == clickedVisualRow then break end
+                        vRow = vRow + 1
                     end
+                    targetRow = targetRow + 1
+                end
+                if targetRow < 1 then targetRow = 1 end
+                if targetRow > #current().lines then targetRow = #current().lines end
+
+                current().foldedLines = current().foldedLines or {}
+                if px < MARGIN_LEFT and getFoldEndLine(current().lines, targetRow) then
+                    current().foldedLines[targetRow] = not current().foldedLines[targetRow] or nil
+                    if current().foldedLines[targetRow] and isLineHidden(current(), current().row) then
+                        current().row = targetRow
+                        current().col = math.min(current().col, #(current().lines[targetRow] or ""))
+                    end
+                else
+                    current().row = targetRow
+                    local lineText = current().lines[current().row] or ""
+                    local bestCol = 0
+                    local minDiff = math.huge
+                    for i = 0, string.len(lineText) do
+                        local testWidth = MARGIN_LEFT + gc:getStringWidth(string.sub(lineText, 1, i))
+                        local diff = math.abs(px - testWidth)
+                        if diff < minDiff then
+                            minDiff = diff; bestCol = i
+                        end
+                    end
+                    current().col = bestCol
                 end
             end
             doc = current()
@@ -997,7 +1527,9 @@ function on.paint(gc)
             for i = 0, string.len(lineText) do
                 local testWidth = MARGIN_LEFT + gc:getStringWidth(string.sub(lineText, 1, i))
                 local diff = math.abs(px - testWidth)
-                if diff < minDiff then minDiff = diff; bestCol = i end
+                if diff < minDiff then
+                    minDiff = diff; bestCol = i
+                end
             end
             current().col = bestCol
         end
@@ -1015,20 +1547,20 @@ function on.paint(gc)
             current().col = 0
         end
     end
-    gc:setColorRGB(c("bg",1),c("bg",2),c("bg",3))
+    gc:setColorRGB(c("bg", 1), c("bg", 2), c("bg", 3))
     gc:fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT)
     local availableWidth = SCREEN_WIDTH - 30
     local tabWidth = math.floor(availableWidth / #editor.tabs)
     for tIdx, tabItem in ipairs(editor.tabs) do
         local tx = (tIdx - 1) * tabWidth
         if tIdx == editor.activeTab then
-            gc:setColorRGB(c("activeTab",1),c("activeTab",2),c("activeTab",3))
+            gc:setColorRGB(c("activeTab", 1), c("activeTab", 2), c("activeTab", 3))
             gc:fillRect(tx, 0, tabWidth, TAB_BAR_HEIGHT)
-            gc:setColorRGB(c("codeH",1),c("codeH",2),c("codeH",3))
+            gc:setColorRGB(c("codeH", 1), c("codeH", 2), c("codeH", 3))
         else
-            gc:setColorRGB(c("inactiveTab",1),c("inactiveTab",2),c("inactiveTab",3))
+            gc:setColorRGB(c("inactiveTab", 1), c("inactiveTab", 2), c("inactiveTab", 3))
             gc:fillRect(tx, 0, tabWidth, TAB_BAR_HEIGHT)
-            gc:setColorRGB(c("inactiveTabText",1),c("inactiveTabText",2),c("inactiveTabText",3))
+            gc:setColorRGB(c("inactiveTabText", 1), c("inactiveTabText", 2), c("inactiveTabText", 3))
         end
         gc:drawRect(tx, 0, tabWidth, TAB_BAR_HEIGHT)
         local displayName = tabItem.name
@@ -1037,155 +1569,180 @@ function on.paint(gc)
         end
         gc:drawString(displayName, tx + 4, 4, "top")
         if #editor.tabs > 1 then
-            gc:setColorRGB(c("closeTab",1),c("closeTab",2),c("closeTab",3))
+            gc:setColorRGB(c("closeTab", 1), c("closeTab", 2), c("closeTab", 3))
             gc:drawString("x", tx + tabWidth - 14, 4, "top")
         end
     end
-    gc:setColorRGB(c("newTabBackground",1),c("newTabBackground",2),c("newTabBackground",3))
+    gc:setColorRGB(c("newTabBackground", 1), c("newTabBackground", 2), c("newTabBackground", 3))
     gc:fillRect(availableWidth, 0, 30, TAB_BAR_HEIGHT)
-    gc:setColorRGB(c("newTabBorders",1),c("newTabBorders",2),c("newTabBorders",3))
+    gc:setColorRGB(c("newTabBorders", 1), c("newTabBorders", 2), c("newTabBorders", 3))
     gc:drawRect(availableWidth, 0, 30, TAB_BAR_HEIGHT)
     gc:drawString("[+]", availableWidth + 6, 4, "top")
+    local maxTextWidth = SCREEN_WIDTH - MARGIN_LEFT - SCROLLBAR_WIDTH - 4
+    local visualLineIndex = 0
+    local startLine, startCol, endLine, endCol
+    if current().row < selAnchorLine or (current().row == selAnchorLine and current().col < selAnchorCol) then
+        startLine, startCol = current().row, current().col
+        endLine, endCol = selAnchorLine, selAnchorCol
+    else
+        startLine, startCol = selAnchorLine, selAnchorCol
+        endLine, endCol = current().row, current().col
+    end
+    local errLine, errMsg = checkSyntaxError(current())
+    local stringStates = getLineStringStates(current().lines)
+    local matchedBrackets = findMatchingBracket(current(), stringStates)
 
+    local physicalRow = current().scrollRow
+    while physicalRow <= #current().lines and visualLineIndex < VISIBLE_LINES do
+        if isLineHidden(current(), physicalRow) then
+            physicalRow = physicalRow + 1
+        else
+            local currentLineText = current().lines[physicalRow]
+            local foldEnd = getFoldEndLine(current().lines, physicalRow)
+            local isFolded = current().foldedLines and current().foldedLines[physicalRow]
+            local subLines = {}
 
-    for i = 0, VISIBLE_LINES - 1 do
-        local lineIdx = current().scrollRow + i
-        local lineText = current().lines[lineIdx]
-        if lineText then
-            local yPos = MARGIN_TOP + (i * LINE_HEIGHT)
-
-            local maxTextWidth = SCREEN_WIDTH - MARGIN_LEFT - SCROLLBAR_WIDTH - 4
-            local visualLineIndex = 0
-            local startLine, startCol, endLine, endCol
-            if current().row < selAnchorLine or (current().row == selAnchorLine and current().col < selAnchorCol) then
-                startLine, startCol = current().row, current().col
-                endLine, endCol = selAnchorLine, selAnchorCol
+            if softWrapEnabled then
+                local currentSubLine = ""
+                for i = 1, string.len(currentLineText) do
+                    local char = string.sub(currentLineText, i, i)
+                    if gc:getStringWidth(currentSubLine .. char) > maxTextWidth then
+                        table.insert(subLines, { text = currentSubLine, startChar = i - string.len(currentSubLine) })
+                        currentSubLine = char
+                    else
+                        currentSubLine = currentSubLine .. char
+                    end
+                end
+                table.insert(subLines,
+                    { text = currentSubLine, startChar = string.len(currentLineText) - string.len(currentSubLine) + 1 })
             else
-                startLine, startCol = selAnchorLine, selAnchorCol
-                endLine, endCol = current().row, current().col
+                table.insert(subLines, { text = currentLineText, startChar = 1 })
             end
 
-            local physicalRow = current().scrollRow
-            while physicalRow <= #current().lines and visualLineIndex < VISIBLE_LINES do
-                local currentLineText = current().lines[physicalRow]
-                local subLines = {}
-
-                if softWrapEnabled then
-                    local currentSubLine = ""
-                    for i = 1, string.len(currentLineText) do
-                        local char = string.sub(currentLineText, i, i)
-                        if gc:getStringWidth(currentSubLine .. char) > maxTextWidth then
-                            table.insert(subLines, {text = currentSubLine, startChar = i - string.len(currentSubLine)})
-                            currentSubLine = char
-                        else
-                            currentSubLine = currentSubLine .. char
-                        end
-                    end
-                    table.insert(subLines, {text = currentSubLine, startChar = string.len(currentLineText) - string.len(currentSubLine) + 1})
-                else
-                    table.insert(subLines, {text = currentLineText, startChar = 1})
-                end
-                local wordMap = {}
-                for pos_str, word in string.gmatch(currentLineText, "()([%w_]+)") do
-                    local pos = tonumber(pos_str)
-                    local wType = "codeH"
-                    if word == "and" or word == "or" or word == "not" or word == "if" or
-                       word == "then" or word == "else" or word == "elseif" or word == "end" or
-                       word == "for" or word == "while" or word == "do" or word == "repeat" or
-                       word == "until" or word == "function" or word == "return" or word == "local" or
-                       word == "break" or word == "in" then
-                        wType = "keywordsH"
-                    elseif word == "true" or word == "false" or word == "nil" then
-                        wType = "boolnilH"
-                    elseif word == "assert" or word=="_G" or word=="ipairs" or word=="pairs" or word=="pcall" or word=="print" or word=="tonumber" or word=="tostring" or word=="type" then
-                        wType = "stdlibH"
-                    end
-
-                    for k = pos, pos + string.len(word) - 1 do
-                        wordMap[k] = wType
-                    end
+            local wordMap = {}
+            for pos_str, word in string.gmatch(currentLineText, "()([%w_]+)") do
+                local pos = tonumber(pos_str)
+                local wType = "codeH"
+                if word == "and" or word == "or" or word == "not" or word == "if" or
+                    word == "then" or word == "else" or word == "elseif" or word == "end" or
+                    word == "for" or word == "while" or word == "do" or word == "repeat" or
+                    word == "until" or word == "function" or word == "return" or word == "local" or
+                    word == "break" or word == "in" then
+                    wType = "keywordsH"
+                elseif word == "true" or word == "false" or word == "nil" then
+                    wType = "boolnilH"
+                elseif word == "assert" or word == "_G" or word == "ipairs" or word == "pairs" or word == "pcall" or word == "print" or word == "tonumber" or word == "tostring" or word == "type" then
+                    wType = "stdlibH"
                 end
 
-
-                for subIdx, subLineInfo in ipairs(subLines) do
-                    if visualLineIndex >= VISIBLE_LINES then break end
-                    local yPos = MARGIN_TOP + (visualLineIndex * LINE_HEIGHT)
-
-                    if subIdx == 1 then
-                        if editor.currentTheme == 2 then gc:setColorRGB(110, 110, 110) else gc:setColorRGB(140, 140, 140) end
-                        local lineNumStr = tostring(physicalRow)
-                        gc:drawString(lineNumStr, MARGIN_LEFT - gc:getStringWidth(lineNumStr) - 6, yPos, "top")
-                    end
-
-                    local DRAWROW = MARGIN_LEFT
-                    local textLen = string.len(subLineInfo.text)
-
-                    for chIdx = 1, textLen do
-                        local globalCharIdx = subLineInfo.startChar + chIdx - 1
-                        local char = string.sub(subLineInfo.text, chIdx, chIdx)
-
-                        local isSelected = false
-                        if isTextSelected and physicalRow >= startLine and physicalRow <= endLine then
-                            if startLine == endLine then
-                                isSelected = ((globalCharIdx - 1) >= startCol and (globalCharIdx - 1) < endCol)
-                            elseif physicalRow == startLine then
-                                isSelected = ((globalCharIdx - 1) >= startCol)
-                            elseif physicalRow == endLine then
-                                isSelected = ((globalCharIdx - 1) < endCol)
-                            else
-                                isSelected = true
-                            end
-                        end
-
-                        if isSelected then
-                            gc:setColorRGB(c("selectColor",1), c("selectColor",2), c("selectColor",3))
-                            gc:fillRect(DRAWROW, yPos, gc:getStringWidth(char), LINE_HEIGHT)
-                            gc:setColorRGB(c("bg",1), c("bg",2), c("bg",3))
-                        else
-                            local themeKey = wordMap[globalCharIdx] or "codeH"
-                            gc:setColorRGB(c(themeKey,1), c(themeKey,2), c(themeKey,3))
-                        end
-
-                        gc:drawString(char, DRAWROW, yPos, "top")
-
-                        if physicalRow == current().row and (globalCharIdx - 1) == current().col and autocompleteHint ~= "" and not isTextSelected then
-                            local oldR, oldG, oldB = c("codeH",1), c("codeH",2), c("codeH",3)
-                            if editor.currentTheme == 2 then gc:setColorRGB(90, 90, 90) else gc:setColorRGB(160, 160, 160) end
-
-                            gc:drawString(autocompleteHint, DRAWROW, yPos, "top")
-
-                            gc:setColorRGB(oldR, oldG, oldB)
-                        end
-
-                        if physicalRow == current().row and (globalCharIdx - 1) == current().col and editor.cursorVisible and not isTextSelected then
-                            gc:setColorRGB(c("codeH",1), c("codeH",2), c("codeH",3))
-                            gc:fillRect(DRAWROW, yPos + 1, 1, LINE_HEIGHT - 1)
-                        end
-
-                        DRAWROW = DRAWROW + gc:getStringWidth(char)
-                    end
-
-                    if physicalRow == current().row and (current().col == string.len(currentLineText)) and (subLineInfo.startChar + textLen > string.len(currentLineText)) and not isTextSelected then
-                        if autocompleteHint ~= "" then
-                            if editor.currentTheme == 2 then gc:setColorRGB(90, 90, 90) else gc:setColorRGB(160, 160, 160) end
-                            gc:drawString(autocompleteHint, DRAWROW, yPos, "top")
-                        end
-
-                        if editor.cursorVisible then
-                            gc:setColorRGB(c("codeH",1), c("codeH",2), c("codeH",3))
-                            gc:fillRect(DRAWROW, yPos + 1, 1, LINE_HEIGHT - 1)
-                        end
-                    end
-
-
-                    visualLineIndex = visualLineIndex + 1
+                for k = pos, pos + string.len(word) - 1 do
+                    wordMap[k] = wType
                 end
-                physicalRow = physicalRow + 1
             end
+
+            -- Override wordMap with string highlights
+            if stringStates[physicalRow] then
+                for k, isStr in pairs(stringStates[physicalRow]) do
+                    if isStr then
+                        wordMap[k] = "stringH"
+                    end
+                end
+            end
+
+            for subIdx, subLineInfo in ipairs(subLines) do
+                if visualLineIndex >= VISIBLE_LINES then break end
+                local yPos = MARGIN_TOP + (visualLineIndex * LINE_HEIGHT)
+
+                if subIdx == 1 then
+                    if foldEnd then
+                        gc:setColorRGB(c("foldH", 1), c("foldH", 2), c("foldH", 3))
+                        gc:drawString(isFolded and ">" or "v", MARGIN_LEFT - 7, yPos, "top")
+                    end
+                    if editor.currentTheme == 2 then gc:setColorRGB(110, 110, 110) else gc:setColorRGB(140, 140, 140) end
+                    local lineNumStr = tostring(physicalRow)
+                    gc:drawString(lineNumStr, MARGIN_LEFT - gc:getStringWidth(lineNumStr) - 9, yPos, "top")
+                end
+
+                local DRAWROW = MARGIN_LEFT
+                local textLen = string.len(subLineInfo.text)
+
+                for chIdx = 1, textLen do
+                    local globalCharIdx = subLineInfo.startChar + chIdx - 1
+                    local char = string.sub(subLineInfo.text, chIdx, chIdx)
+                    local charWidth = gc:getStringWidth(char)
+
+                    local isSelected = false
+                    if isTextSelected and physicalRow >= startLine and physicalRow <= endLine then
+                        if startLine == endLine then
+                            isSelected = ((globalCharIdx - 1) >= startCol and (globalCharIdx - 1) < endCol)
+                        elseif physicalRow == startLine then
+                            isSelected = ((globalCharIdx - 1) >= startCol)
+                        elseif physicalRow == endLine then
+                            isSelected = ((globalCharIdx - 1) < endCol)
+                        else
+                            isSelected = true
+                        end
+                    end
+
+                    local isBracketMatched = matchedBrackets and matchedBrackets[physicalRow .. ":" .. globalCharIdx]
+
+                    if isSelected then
+                        gc:setColorRGB(c("selectColor", 1), c("selectColor", 2), c("selectColor", 3))
+                        gc:fillRect(DRAWROW, yPos, charWidth, LINE_HEIGHT)
+                        gc:setColorRGB(c("bg", 1), c("bg", 2), c("bg", 3))
+                    else
+                        if isBracketMatched then
+                            gc:setColorRGB(c("bracketMatchH", 1), c("bracketMatchH", 2), c("bracketMatchH", 3))
+                            gc:fillRect(DRAWROW, yPos, charWidth, LINE_HEIGHT)
+                        end
+                        local themeKey = wordMap[globalCharIdx] or "codeH"
+                        gc:setColorRGB(c(themeKey, 1), c(themeKey, 2), c(themeKey, 3))
+                    end
+
+                    gc:drawString(char, DRAWROW, yPos, "top")
+
+                    if physicalRow == current().row and (globalCharIdx - 1) == current().col and autocompleteHint ~= "" and not isTextSelected then
+                        local oldR, oldG, oldB = c("codeH", 1), c("codeH", 2), c("codeH", 3)
+                        if editor.currentTheme == 2 then gc:setColorRGB(90, 90, 90) else gc:setColorRGB(160, 160, 160) end
+                        gc:drawString(autocompleteHint, DRAWROW, yPos, "top")
+                        gc:setColorRGB(oldR, oldG, oldB)
+                    end
+
+                    if physicalRow == current().row and (globalCharIdx - 1) == current().col and editor.cursorVisible and not isTextSelected then
+                        gc:setColorRGB(c("codeH", 1), c("codeH", 2), c("codeH", 3))
+                        gc:fillRect(DRAWROW, yPos + 1, 1, LINE_HEIGHT - 1)
+                    end
+
+                    DRAWROW = DRAWROW + charWidth
+                end
+
+                if physicalRow == current().row and (current().col == string.len(currentLineText)) and (subLineInfo.startChar + textLen > string.len(currentLineText)) and not isTextSelected then
+                    if autocompleteHint ~= "" then
+                        if editor.currentTheme == 2 then gc:setColorRGB(90, 90, 90) else gc:setColorRGB(160, 160, 160) end
+                        gc:drawString(autocompleteHint, DRAWROW, yPos, "top")
+                    end
+
+                    if editor.cursorVisible then
+                        gc:setColorRGB(c("codeH", 1), c("codeH", 2), c("codeH", 3))
+                        gc:fillRect(DRAWROW, yPos + 1, 1, LINE_HEIGHT - 1)
+                    end
+                end
+
+                if isFolded and subIdx == #subLines then
+                    gc:setColorRGB(c("foldH", 1), c("foldH", 2), c("foldH", 3))
+                    gc:drawString(" [...]", DRAWROW, yPos, "top")
+                end
+
+                if physicalRow == errLine then
+                    local squigglyWidth = math.max(10, gc:getStringWidth(subLineInfo.text))
+                    drawSquiggly(gc, MARGIN_LEFT, yPos + LINE_HEIGHT - 2, squigglyWidth)
+                end
+
+                visualLineIndex = visualLineIndex + 1
+            end
+            physicalRow = physicalRow + 1
         end
     end
-
-
 
 
     if #current().lines > VISIBLE_LINES then
@@ -1193,9 +1750,9 @@ function on.paint(gc)
         local thumbHeight = math.max(15, math.floor((VISIBLE_LINES / #current().lines) * trackHeight))
         local scrollPercentage = (current().scrollRow - 1) / (#current().lines - VISIBLE_LINES)
         local thumbY = MARGIN_TOP + math.floor(scrollPercentage * (trackHeight - thumbHeight))
-        gc:setColorRGB(c("scrollTrack",1),c("scrollTrack",2),c("scrollTrack",3))
+        gc:setColorRGB(c("scrollTrack", 1), c("scrollTrack", 2), c("scrollTrack", 3))
         gc:fillRect(SCREEN_WIDTH - SCROLLBAR_WIDTH - 2, MARGIN_TOP, SCROLLBAR_WIDTH, trackHeight)
-        gc:setColorRGB(c("scrollThumb",1),c("scrollThumb",2),c("scrollThumb",3))
+        gc:setColorRGB(c("scrollThumb", 1), c("scrollThumb", 2), c("scrollThumb", 3))
         gc:fillRect(SCREEN_WIDTH - SCROLLBAR_WIDTH - 2, thumbY, SCROLLBAR_WIDTH, thumbHeight)
     end
 
@@ -1206,6 +1763,7 @@ end
 
 function on.tabKey()
     local doc = current()
+    pushUndo(doc)
     local currentText = doc.lines[doc.row] or ""
     local left = string.sub(currentText, 1, doc.col)
     local right = string.sub(currentText, doc.col + 1)
@@ -1221,17 +1779,18 @@ function on.tabKey()
     local spaces = string.rep(" ", indentSetting)
     doc.lines[doc.row] = left .. spaces .. right
     doc.col = doc.col + indentSetting
+    editor.preferredCol = 0
+    clampCursor(doc)
     platform.window:invalidate()
 end
 
-
-
 function on.charIn(char)
     if Prompt.charIn(char) then return end
+    local doc = current()
+    pushUndo(doc)
     deleteSelectedText()
 
     local character = char
-    local doc = current()
     local currentText = doc.lines[doc.row] or ""
     local left = string.sub(currentText, 1, doc.col)
     local right = string.sub(currentText, doc.col + 1)
@@ -1243,7 +1802,7 @@ function on.charIn(char)
     if char == "log(" then character = "}" end
 
     local nextChar = string.sub(right, 1, 1)
-    if (character == ")" or character == "]" or character == "}" or character == '"') and nextChar == character then
+    if (character == ")" or character == "]" or character == "}" or character == '"' or character == "'") and nextChar == character then
         doc.col = doc.col + 1
         autocompleteHint = ""
         platform.window:invalidate()
@@ -1251,11 +1810,18 @@ function on.charIn(char)
     end
 
     local closingPair = ""
-    if character == "(" then closingPair = ")"
-    elseif character == "[" then closingPair = "]"
-    elseif character == "{" then closingPair = "}"
-    elseif character == '"' then closingPair = '"'
+    if character == "(" then
+        closingPair = ")"
+    elseif character == "[" then
+        closingPair = "]"
+    elseif character == "{" then
+        closingPair = "}"
+    elseif character == '"' then
+        closingPair = '"'
+    elseif character == "'" then
+        closingPair = "'"
     end
+
 
     local newLeft = left .. character
     doc.lines[doc.row] = newLeft .. closingPair .. right
@@ -1396,60 +1962,65 @@ function on.charIn(char)
                 end
             end
         end
-        if #matches == 1 then
+
+        if #matches >= 1 then
             local kwSegment = string.sub(matches[1], string.len(prefix) + 1)
             autocompleteHint = string.sub(kwSegment, string.len(lastSegment) + 1)
             autocompleteFullWord = matches[1]
             autocompleteMatchLen = string.len(currentWord)
-        elseif #matches > 1 then
-            local kwSegment = string.sub(matches[1], string.len(prefix) + 1)
-            autocompleteHint = string.sub(kwSegment, string.len(lastSegment) + 1) .. " (" .. #matches .. ")"
-            autocompleteFullWord = matches[1]
-            autocompleteMatchLen = string.len(currentWord)
         end
     end
+    editor.preferredCol = 0
+    clampCursor(doc)
     platform.window:invalidate()
 end
 
 function on.enterKey()
     if Menu.enter() then return end
     if Prompt.enter() then return end
+    local doc = current()
+    pushUndo(doc)
     deleteSelectedText()
     autocompleteHint = ""
-    local doc = current()
     local currentText = doc.lines[doc.row] or ""
     local left = string.sub(currentText, 1, doc.col)
     local right = string.sub(currentText, doc.col + 1)
     local leadingSpaces = string.match(left, "^(%s*)") or ""
     local trimmedLeft = string.gsub(left, "%s*$", "")
     if string.match(trimmedLeft, "%f[%w]then$") or
-       string.match(trimmedLeft, "%f[%w]do$") or
-       string.match(trimmedLeft, "%f[%w]function%s*%b()$") or
-       string.match(trimmedLeft, "%f[%w]function%s*[%w_.:]*%s*%b()$") or
-       string.match(trimmedLeft, "%f[%w]repeat$") or
-       string.match(trimmedLeft, "%f[%w]else$") or
-       string.match(trimmedLeft, "%f[%w]elseif%s.*$") then
+        string.match(trimmedLeft, "%f[%w]do$") or
+        string.match(trimmedLeft, "%f[%w]function%s*%b()$") or
+        string.match(trimmedLeft, "%f[%w]function%s*[%w_.:]*%s*%b()$") or
+        string.match(trimmedLeft, "%f[%w]repeat$") or
+        string.match(trimmedLeft, "%f[%w]else$") or
+        string.match(trimmedLeft, "%f[%w]elseif%s.*$") then
         leadingSpaces = leadingSpaces .. string.rep(" ", indentSetting)
     end
     doc.lines[doc.row] = left
     table.insert(doc.lines, doc.row + 1, leadingSpaces .. right)
     doc.row = doc.row + 1
     doc.col = string.len(leadingSpaces)
+    editor.preferredCol = 0
+    clampCursor(doc)
     scrollIntoView()
     platform.window:invalidate()
 end
 
-
 function on.backspaceKey()
     if Prompt.backspace() then return end
-    if deleteSelectedText() then
+    local doc = current()
+    if isTextSelected then
+        pushUndo(doc)
+        deleteSelectedText()
         autocompleteHint = ""
         scrollIntoView()
         platform.window:invalidate()
         return
     end
 
-    local doc = current()
+    if doc.col == 0 and doc.row == 1 then return end
+    pushUndo(doc)
+
     local currentText = doc.lines[doc.row] or ""
     if doc.col > 0 then
         local left = string.sub(currentText, 1, doc.col)
@@ -1485,7 +2056,8 @@ function on.backspaceKey()
             end
         end
     end
-
+    editor.preferredCol = 0
+    clampCursor(doc)
     scrollIntoView()
     platform.window:invalidate()
 end
@@ -1506,20 +2078,28 @@ function on.arrowKey(direction)
     end
 
     local doc = current()
-    isTextSelected = false
+    clampCursor(doc)
+
     if direction == "up" then
+        if not editor.preferredCol or editor.preferredCol == 0 then
+            editor.preferredCol = doc.col
+        end
         if doc.row > 1 then
             doc.row = doc.row - 1
-            local lineLength = string.len(doc.lines[doc.row] or "")
-            if doc.col > lineLength then doc.col = lineLength end
         end
+        local lineLength = string.len(doc.lines[doc.row] or "")
+        doc.col = math.min(editor.preferredCol, lineLength)
     elseif direction == "down" then
+        if not editor.preferredCol or editor.preferredCol == 0 then
+            editor.preferredCol = doc.col
+        end
         if doc.row < #doc.lines then
             doc.row = doc.row + 1
-            local lineLength = string.len(doc.lines[doc.row] or "")
-            if doc.col > lineLength then doc.col = lineLength end
         end
+        local lineLength = string.len(doc.lines[doc.row] or "")
+        doc.col = math.min(editor.preferredCol, lineLength)
     elseif direction == "left" then
+        editor.preferredCol = 0
         if doc.col > 0 then
             doc.col = doc.col - 1
         elseif doc.row > 1 then
@@ -1527,6 +2107,7 @@ function on.arrowKey(direction)
             doc.col = string.len(doc.lines[doc.row] or "")
         end
     elseif direction == "right" then
+        editor.preferredCol = 0
         local lineLength = string.len(doc.lines[doc.row] or "")
         if doc.col < lineLength then
             doc.col = doc.col + 1
@@ -1535,6 +2116,8 @@ function on.arrowKey(direction)
             doc.col = 0
         end
     end
+
+    clampCursor(doc)
     scrollIntoView()
     platform.window:invalidate()
 end
@@ -1580,9 +2163,10 @@ function on.paste()
     local pasteText = clipboard.getText()
     if not pasteText or pasteText == "" then return end
 
+    local doc = current()
+    pushUndo(doc)
     deleteSelectedText()
 
-    local doc = current()
     local currentText = doc.lines[doc.row] or ""
     local left = string.sub(currentText, 1, doc.col)
     local right = string.sub(currentText, doc.col + 1)
@@ -1615,24 +2199,27 @@ function on.paste()
     end
 
     editor.shouldWrap = true
+    editor.preferredCol = 0
+    clampCursor(doc)
     scrollIntoView()
     platform.window:invalidate()
 end
 
 function on.mouseDown(x, y)
-    editor.pendingClick = {x = x, y = y}
+    isTextSelected = false
+    editor.preferredCol = 0
+    editor.pendingClick = { x = x, y = y }
     platform.window:invalidate()
 end
 
 function on.timer()
-    editor.cursorVisible = not editor.cursorVisible
     platform.window:invalidate()
 end
 
 function on.contextMenu()
-    code=""
-    for e=1,#current().lines do
-        code=code..current().lines[e].."\n"
+    code = ""
+    for e = 1, #current().lines do
+        code = code .. current().lines[e] .. "\n"
     end
     var.store("nidecurcode", code)
 end
@@ -1791,19 +2378,33 @@ function on.returnKey()
     if #matches > 0 then
         Menu.show("Autocomplete:", matches, function(idx, selected)
             if not selected then return end
-                local doc = current()
-                local currentText = doc.lines[doc.row] or ""
-                local left = string.sub(currentText, 1, doc.col - string.len(lastSegment))
-                local right = string.sub(currentText, doc.col + 1)
-                doc.lines[doc.row] = left .. string.sub(selected, string.len(prefix) + 1) .. right
-                doc.col = string.len(left .. string.sub(selected, string.len(prefix) + 1))
-                autocompleteHint = ""
-                platform.window:invalidate()
+            local doc = current()
+            pushUndo(doc)
+            local currentText = doc.lines[doc.row] or ""
+            local left = string.sub(currentText, 1, doc.col - string.len(lastSegment))
+            local right = string.sub(currentText, doc.col + 1)
+            doc.lines[doc.row] = left .. string.sub(selected, string.len(prefix) + 1) .. right
+            doc.col = string.len(left .. string.sub(selected, string.len(prefix) + 1))
+            autocompleteHint = ""
+            platform.window:invalidate()
         end)
         return true
     end
 end
 
+function on.escapeKey()
+    if Menu.active then
+        Menu.active = false
+        platform.window:invalidate()
+        return
+    end
+    if Prompt.active then
+        Prompt.active = false
+        platform.window:invalidate()
+        return
+    end
+    undo()
+end
 
 timer.start(0.4)
 loadCustomThemes()
