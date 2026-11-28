@@ -9,17 +9,17 @@ local VISIBLE_LINES = math.floor((SCREEN_HEIGHT - MARGIN_TOP) / LINE_HEIGHT)
 local isTextSelected = false
 local selAnchorLine = 1
 local selAnchorCol = 0
-local selStartLine = nil
-local selStartChar = nil
-local selEndLine = nil
-local selEndChar = nil
-local selStartCol = 0
-local selEndCol = 0
-local isSelecting = false
-local localClipboard = ""
+--local selStartLine = nil
+--local selStartChar = nil
+--local selEndLine = nil
+--local selEndChar = nil
+--local selStartCol = 0
+--local selEndCol = 0
+--local isSelecting = false
+--local localClipboard = ""
 local autocompleteHint = ""
-local autocompleteFullWord = ""
-local autocompleteMatchLen = 0
+--local autocompleteFullWord = ""
+--local autocompleteMatchLen = 0
 local indentSetting = 4
 local softWrapEnabled = true
 local luna = nrequire("luna")
@@ -960,6 +960,237 @@ Menu = {
     end
 }
 
+CommandPalette = {
+    active = false,
+    query = "",
+    filtered = {},
+    index = 1,
+    scrollRow = 1,
+    maxVisible = 7,
+    commands = {},
+
+    register = function(label, fn)
+        table.insert(CommandPalette.commands, {
+            label = label,
+            lowerLabel = string.lower(label),
+            fn = fn
+        })
+    end,
+
+    scoreMatch = function(queryLower, targetLower)
+        if queryLower == "" then return 1 end
+        if string.sub(targetLower, 1, #queryLower) == queryLower then
+            return 1000 - #targetLower
+        end
+        local subStart = string.find(targetLower, queryLower, 1, true)
+        if subStart then
+            return 500 - subStart - #targetLower
+        end
+        local qIdx, qLen, tLen = 1, #queryLower, #targetLower
+        local score, lastMatch = 0, 0
+        for tIdx = 1, tLen do
+            if string.byte(targetLower, tIdx) == string.byte(queryLower, qIdx) then
+                local prev = tIdx > 1 and string.byte(targetLower, tIdx - 1) or 32
+                if prev == 32 or prev == 58 or prev == 95 then score = score + 15 end
+                if lastMatch == tIdx - 1 then score = score + 10 end
+                score = score + 1
+                lastMatch = tIdx
+                qIdx = qIdx + 1
+                if qIdx > qLen then return score end
+            end
+        end
+        return nil
+    end,
+
+    updateFilter = function()
+        local qLower = string.lower(CommandPalette.query)
+        local results = {}
+        for i = 1, #CommandPalette.commands do
+            local cmd = CommandPalette.commands[i]
+            local s = CommandPalette.scoreMatch(qLower, cmd.lowerLabel)
+            if s then
+                table.insert(results, { cmd = cmd, score = s })
+            end
+        end
+        if qLower ~= "" then
+            table.sort(results, function(a, b)
+                return a.score > b.score
+            end)
+        end
+        CommandPalette.filtered = {}
+        for i = 1, #results do
+            CommandPalette.filtered[i] = results[i].cmd
+        end
+        CommandPalette.index = 1
+        CommandPalette.scrollRow = 1
+    end,
+
+    open = function()
+        Menu.active = false
+        Prompt.active = false
+        CommandPalette.active = true
+        CommandPalette.query = ""
+        CommandPalette.updateFilter()
+        platform.window:invalidate()
+    end,
+
+    close = function()
+        CommandPalette.active = false
+        platform.window:invalidate()
+    end,
+
+    toggle = function()
+        if CommandPalette.active then
+            CommandPalette.close()
+        else
+            CommandPalette.open()
+        end
+    end,
+
+    charIn = function(char)
+        if not CommandPalette.active then return false end
+        if type(char) ~= "string" or #char == 0 then return true end
+        CommandPalette.query = CommandPalette.query .. tostring(char)
+        CommandPalette.updateFilter()
+        platform.window:invalidate()
+        return true
+    end,
+
+    backspace = function()
+        if not CommandPalette.active then return false end
+        if #CommandPalette.query > 0 then
+            CommandPalette.query = string.sub(CommandPalette.query, 1, -2)
+            CommandPalette.updateFilter()
+        end
+        platform.window:invalidate()
+        return true
+    end,
+
+    arrowUp = function()
+        if not CommandPalette.active then return false end
+        local total = #CommandPalette.filtered
+        if total == 0 then return true end
+        CommandPalette.index = CommandPalette.index > 1 and (CommandPalette.index - 1) or total
+        if CommandPalette.index < CommandPalette.scrollRow then
+            CommandPalette.scrollRow = CommandPalette.index
+        elseif CommandPalette.index == total then
+            CommandPalette.scrollRow = math.max(1, total - CommandPalette.maxVisible + 1)
+        end
+        platform.window:invalidate()
+        return true
+    end,
+
+    arrowDown = function()
+        if not CommandPalette.active then return false end
+        local total = #CommandPalette.filtered
+        if total == 0 then return true end
+        CommandPalette.index = CommandPalette.index < total and (CommandPalette.index + 1) or 1
+        if CommandPalette.index >= CommandPalette.scrollRow + CommandPalette.maxVisible then
+            CommandPalette.scrollRow = CommandPalette.index - CommandPalette.maxVisible + 1
+        elseif CommandPalette.index == 1 then
+            CommandPalette.scrollRow = 1
+        end
+        platform.window:invalidate()
+        return true
+    end,
+
+    enter = function()
+        if not CommandPalette.active then return false end
+        local chosen = CommandPalette.filtered[CommandPalette.index]
+        CommandPalette.active = false
+        platform.window:invalidate()
+        if chosen then chosen.fn() end
+        return true
+    end,
+
+    draw = function(gc)
+        if not CommandPalette.active then return end
+
+        local boxX, boxY = 14, 12
+        local boxW = SCREEN_WIDTH - 28
+        local headerH, rowH = 24, 18
+        local total = #CommandPalette.filtered
+        local visibleCount = math.max(1, math.min(total, CommandPalette.maxVisible))
+        local boxH = headerH + (visibleCount * rowH) + 6
+
+        gc:setColorRGB(c("promptBg", 1), c("promptBg", 2), c("promptBg", 3))
+        gc:fillRect(boxX, boxY, boxW, boxH)
+        gc:setColorRGB(c("codeH", 1), c("codeH", 2), c("codeH", 3))
+        gc:drawRect(boxX, boxY, boxW, boxH)
+
+        gc:setColorRGB(c("activeRow", 1), c("activeRow", 2), c("activeRow", 3))
+        gc:fillRect(boxX + 4, boxY + 4, boxW - 8, headerH - 6)
+        gc:setFont("sansserif", "b", 10)
+        gc:setColorRGB(c("keywordsH", 1), c("keywordsH", 2), c("keywordsH", 3))
+        gc:drawString(">", boxX + 8, boxY + 5, "top")
+
+        gc:setFont("sansserif", "r", 10)
+        local cursorChar = editor.cursorVisible and "|" or ""
+        local displayQuery = CommandPalette.query .. cursorChar
+        if displayQuery == "" or displayQuery == "|" then
+            gc:setColorRGB(c("hintH", 1), c("hintH", 2), c("hintH", 3))
+            gc:drawString("Type a command...", boxX + 18, boxY + 5, "top")
+        else
+            gc:setColorRGB(c("codeH", 1), c("codeH", 2), c("codeH", 3))
+            gc:drawString(displayQuery, boxX + 18, boxY + 5, "top")
+        end
+
+        local countStr = tostring(total)
+        gc:setColorRGB(c("lineNumH", 1), c("lineNumH", 2), c("lineNumH", 3))
+        gc:drawString(countStr, boxX + boxW - gc:getStringWidth(countStr) - 8, boxY + 5, "top")
+
+        gc:setColorRGB(c("newTabBorders", 1), c("newTabBorders", 2), c("newTabBorders", 3))
+        gc:drawLine(boxX + 4, boxY + headerH, boxX + boxW - 4, boxY + headerH)
+
+        if total == 0 then
+            gc:setColorRGB(c("hintH", 1), c("hintH", 2), c("hintH", 3))
+            gc:drawString("No matching commands", boxX + 10, boxY + headerH + 4, "top")
+            return
+        end
+
+        local listW = total > CommandPalette.maxVisible and (boxW - 16) or (boxW - 8)
+        for i = 0, visibleCount - 1 do
+            local itemIdx = CommandPalette.scrollRow + i
+            local cmd = CommandPalette.filtered[itemIdx]
+            if cmd then
+                local itemY = boxY + headerH + 3 + (i * rowH)
+                if itemIdx == CommandPalette.index then
+                    gc:setColorRGB(c("selectColor", 1), c("selectColor", 2), c("selectColor", 3))
+                    gc:fillRect(boxX + 4, itemY, listW, rowH - 1)
+                end
+
+                local cat, title = cmd.label:match("^([^:]+:%s*)(.+)$")
+                local drawX = boxX + 8
+                if cat and title then
+                    gc:setColorRGB(c("stdlibH", 1), c("stdlibH", 2), c("stdlibH", 3))
+                    gc:drawString(cat, drawX, itemY + 1, "top")
+                    drawX = drawX + gc:getStringWidth(cat)
+                    gc:setColorRGB(c("codeH", 1), c("codeH", 2), c("codeH", 3))
+                    local maxTitleW = (boxX + listW) - drawX
+                    local shown = title
+                    while #shown > 3 and gc:getStringWidth(shown) > maxTitleW do
+                        shown = string.sub(shown, 1, -5) .. "..."
+                    end
+                    gc:drawString(shown, drawX, itemY + 1, "top")
+                else
+                    gc:setColorRGB(c("codeH", 1), c("codeH", 2), c("codeH", 3))
+                    gc:drawString(cmd.label, drawX, itemY + 1, "top")
+                end
+            end
+        end
+
+        if total > CommandPalette.maxVisible then
+            local sbX, sbY = boxX + boxW - 10, boxY + headerH + 3
+            local sbH = visibleCount * rowH
+            gc:setColorRGB(c("menuScrollTrack", 1), c("menuScrollTrack", 2), c("menuScrollTrack", 3))
+            gc:fillRect(sbX, sbY, 6, sbH)
+            local thumbH = math.max(10, math.floor((CommandPalette.maxVisible / total) * sbH))
+            local scrollPct = (CommandPalette.scrollRow - 1) / (total - CommandPalette.maxVisible)
+            gc:setColorRGB(c("menuScrollThumb", 1), c("menuScrollThumb", 2), c("menuScrollThumb", 3))
+            gc:fillRect(sbX, sbY + math.floor(scrollPct * (sbH - thumbH)), 6, thumbH)
+        end
+    end
+}
 toolpalette.enableCopy(true)
 toolpalette.enablePaste(true)
 menu = {
@@ -1281,7 +1512,7 @@ end
                 name = "Untitled" .. editor.tabCounter,
                 lines = { "" },
                 row = 1,
-                col = 0, -- Changed from 17 to 0
+                col = 0,
                 scrollRow = 1
             })
             editor.activeTab = #editor.tabs
@@ -1688,7 +1919,6 @@ function on.paint(gc)
                 end
             end
 
-            -- Override wordMap with string highlights
             if stringStates[physicalRow] then
                 for k, isStr in pairs(stringStates[physicalRow]) do
                     if isStr then
@@ -1806,6 +2036,7 @@ function on.paint(gc)
 
     Prompt.paint(gc)
     Menu.draw(gc)
+    CommandPalette.draw(gc)
     plugins.triggerHook("onRender", gc)
 end
 
@@ -1832,13 +2063,19 @@ function on.tabKey()
     platform.window:invalidate()
 end
 
+function on.help()
+    CommandPalette.toggle()
+end
+
 function on.charIn(char)
-    if Prompt.charIn(char) then return end
+    if not char or char == "" then return end
+    local character = char
+    if CommandPalette.charIn(character) then return end
+    if Prompt.charIn(character) then return end
     local doc = current()
     pushUndo(doc)
     deleteSelectedText()
 
-    local character = char
     local currentText = doc.lines[doc.row] or ""
     local left = string.sub(currentText, 1, doc.col)
     local right = string.sub(currentText, doc.col + 1)
@@ -2024,6 +2261,7 @@ function on.charIn(char)
 end
 
 function on.enterKey()
+    if CommandPalette.enter() then return end
     if Menu.enter() then return end
     if Prompt.enter() then return end
     local doc = current()
@@ -2055,6 +2293,7 @@ function on.enterKey()
 end
 
 function on.backspaceKey()
+    if CommandPalette.backspace() then return end
     if Prompt.backspace() then return end
     local doc = current()
     if isTextSelected then
@@ -2111,6 +2350,14 @@ function on.backspaceKey()
 end
 
 function on.arrowKey(direction)
+    if CommandPalette.active then
+        if direction == "up" then
+            CommandPalette.arrowUp()
+        elseif direction == "down" then
+            CommandPalette.arrowDown()
+        end
+        return
+    end
     if Prompt.active then return end
     if Menu.active then
         if direction == "up" then
@@ -2441,6 +2688,10 @@ function on.returnKey()
 end
 
 function on.escapeKey()
+    if CommandPalette.active then
+        CommandPalette.close()
+        return
+    end
     if Menu.active then
         Menu.active = false
         platform.window:invalidate()
